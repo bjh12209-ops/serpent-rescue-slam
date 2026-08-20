@@ -1,0 +1,77 @@
+# ROS 2 / colcon build outputs
+/build/
+/install/
+/log/
+
+# Python cache and generated files
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# C/C++ build artifacts
+*.o
+*.so
+*.a
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+*~
+.~lock.*#
+
+# Presentation-only deliverables (not required for robot development)
+/docs/SERPENT_SLAM_웹관제_발표자료*.pptx
+/docs/SERPENT_SLAM_웹관제_발표자료*.pdf
+/docs/notion_presentation_slam_web_app.md
+/docs/presentation_assets/
+/tools/generate_slam_presentation.py
+
+# Large robot datasets and generated maps
+*.bag
+*.mcap
+*.db
+*.db-journal
+rosbag2_*/
+datasets/
+maps/generated/
+terrain_export/
+
+# Generated ML runtime artifacts
+.venv-yolo/
+*.pt
+*.onnx
+*.engine
+*.plan
+
+# Local upstream reference checkout. The active RS-485 driver is
+# src/wt901c485_driver; this nested Git repository is not a configured submodule.
+/src/witmotion_ros2/
+
+# Environment variables and credentials
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# SSH and common credential files
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+credentials.json
+secrets.json
+
+# VS Code and operating-system files
+.vscode/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,48 @@
+rtabmap:
+  ros__parameters:
+    frame_id: base_link
+    odom_frame_id: odom
+    map_frame_id: map
+    publish_tf: true
+    wait_for_transform: 0.3
+
+    subscribe_depth: true
+    subscribe_rgbd: false
+    subscribe_rgb: false
+    subscribe_stereo: false
+    subscribe_scan: false
+    subscribe_scan_cloud: false
+    subscribe_odom_info: false
+
+    # Odometry is read from odom -> base_link TF. D435 color and aligned depth
+    # timestamps are close but are not guaranteed to be exactly identical.
+    approx_sync: true
+    approx_sync_max_interval: 0.02
+    topic_queue_size: 10
+    sync_queue_size: 20
+    qos_image: 2
+    qos_camera_info: 2
+    qos_imu: 1
+
+    Reg/Strategy: "0"
+    Optimizer/GravitySigma: "0.3"
+    # The camera and odometry stay at 30 Hz. Process online map/loop-closure
+    # updates at 5 Hz instead of the 1 Hz RTAB-Map default. Mapping at the full
+    # camera rate needlessly grows CPU load, the graph and the database.
+    Rtabmap/DetectionRate: "5.0"
+    Rtabmap/TimeThr: "0"
+    Kp/MaxFeatures: "1000"
+    Vis/MaxFeatures: "1500"
+    Vis/MinInliers: "20"
+    RGBD/LinearUpdate: "0.05"
+    RGBD/AngularUpdate: "0.05"
+    RGBD/OptimizeFromGraphEnd: "false"
+
+    # Keep a 3 cm 3-D occupancy representation for navigation/debugging.
+    # The database also retains RGB-D data used by rtabmap-export for meshes.
+    Grid/FromDepth: "true"
+    Grid/3D: "true"
+    Grid/CellSize: "0.03"
+    Grid/DepthDecimation: "1"
+    Grid/RangeMax: "5.0"
+    Grid/RayTracing: "true"

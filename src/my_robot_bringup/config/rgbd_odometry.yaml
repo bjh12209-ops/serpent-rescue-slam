@@ -1,0 +1,30 @@
+rgbd_odometry:
+  ros__parameters:
+    frame_id: base_link
+    # The raw topic is named /visual_odom, but its pose is expressed in the
+    # same odom frame used by the EKF. TF publication remains disabled.
+    odom_frame_id: odom
+    publish_tf: false
+    wait_for_transform: 0.2
+    # Start visual odometry even if the external RS485 IMU is unplugged.
+    # When /imu_52/data is available it is still consumed for orientation,
+    # but an IMU cable/driver failure must not block the entire SLAM chain.
+    wait_imu_to_init: false
+    always_check_imu_tf: false
+
+    # The D435 color and aligned-depth streams can differ by a few
+    # milliseconds even with enable_sync. Exact sync then blocks odometry
+    # completely, so pair only frames that are at most 20 ms apart.
+    approx_sync: true
+    approx_sync_max_interval: 0.02
+    topic_queue_size: 10
+    sync_queue_size: 20
+    qos: 2
+    qos_camera_info: 2
+    qos_imu: 1
+
+    Odom/Strategy: "0"
+    Odom/ResetCountdown: "1"
+    OdomF2M/MaxSize: "1500"
+    Vis/MinInliers: "15"
+    Vis/MaxDepth: "5.0"
