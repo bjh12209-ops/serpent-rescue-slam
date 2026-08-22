@@ -15,14 +15,14 @@ rgbd_odometry:
     # completely, so pair only frames that are at most 20 ms apart.
     approx_sync: true
     approx_sync_max_interval: 0.02
-    topic_queue_size: 10
-    sync_queue_size: 20
+    topic_queue_size: 5
+    sync_queue_size: 8
     qos: 2
     qos_camera_info: 2
 
     Odom/Strategy: "0"
-    Odom/ResetCountdown: "1"
-    OdomF2M/MaxSize: "2000"
+    Odom/ResetCountdown: "3"
+    OdomF2M/MaxSize: "1200"
     Vis/MinInliers: "20"
-    Vis/MaxFeatures: "1500"
+    Vis/MaxFeatures: "1000"
     Vis/MaxDepth: "5.0"

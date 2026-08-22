@@ -22,6 +22,7 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
   ament_add_pytest_test(test_slam_telemetry test/test_slam_telemetry.py)
   ament_add_pytest_test(test_person_pose_detector test/test_person_pose_detector.py)
+  ament_add_pytest_test(test_mission_control_gateway test/test_mission_control_gateway.py)
 endif()
 
 install(DIRECTORY

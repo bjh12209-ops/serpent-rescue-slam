@@ -1,0 +1,20 @@
+mission_control_gateway:
+  ros__parameters:
+    # Active IMUs. Extend these parallel arrays when more modules are fitted.
+    imu_ids: ["50", "51", "52"]
+    imu_topics: ["/imu_50/data", "/imu_51/data", "/imu_52/data"]
+    imu_roles: ["HEAD", "MIDDLE", "TAIL"]
+    imu_module_indices: [1, 2, 3]
+    robot_module_count: 7
+
+    # The camera -> head IMU transform is measured. Translations for 0x51 and
+    # 0x52 have not been measured, so they are explicitly marked unknown.
+    imu_translation_known: [true, false, false]
+    imu_translation_x: [-0.05, 0.0, 0.0]
+    imu_translation_y: [0.0, 0.0, 0.0]
+    imu_translation_z: [0.02, 0.0, 0.0]
+
+    # UI-only module dimensions/spacing; these are not TF or calibration data.
+    imu_visual_lengths: [0.28, 0.28, 0.28]
+    imu_stale_timeout_sec: 0.5
+    imu_web_publish_rate: 15.0

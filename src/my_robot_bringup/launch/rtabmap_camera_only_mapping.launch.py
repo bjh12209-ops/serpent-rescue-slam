@@ -84,14 +84,11 @@ def generate_launch_description():
                     ),
                     "Mem/IncrementalMemory": "true",
                     "Mem/InitWMWithAllNodes": "false",
-                    # The Intel N97 needs about 0.24-0.32 s for an undecimated
-                    # 3 cm map update. Three updates/s prevents queue growth
-                    # while RGB-D odometry continues at the camera rate.
-                    "Rtabmap/DetectionRate": "3.0",
+                    "Rtabmap/DetectionRate": "2.0",
                     "Optimizer/GravitySigma": "0.0",
                 },
             ],
-            remappings=rgbd_remappings,
+            remappings=[*rgbd_remappings, ("odom", "/visual_odom")],
         ),
         Node(
             package="rtabmap_viz",

@@ -3,6 +3,7 @@
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
+import numpy as np
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "person_pose_detector.py"
 SPEC = spec_from_file_location("person_pose_detector", SCRIPT)
@@ -64,3 +65,27 @@ def test_detection_debouncer_prevents_flicker():
     assert debounce.update(False) is True
     assert debounce.update(False) is True
     assert debounce.update(False) is False
+
+
+def test_depth_localization_backprojects_box_center():
+    """A centered one-meter person should lie on the optical Z axis."""
+    depth = np.full((480, 640), 1000, dtype=np.uint16)
+    camera_matrix = [600.0, 0.0, 320.0, 0.0, 600.0, 240.0, 0.0, 0.0, 1.0]
+    position = MODULE.estimate_optical_position(
+        {"bbox": [0.25, 0.25, 0.75, 0.75]},
+        depth,
+        camera_matrix,
+    )
+    assert position is not None
+    assert abs(position["x"]) < 1e-6
+    assert abs(position["y"]) < 1e-6
+    assert abs(position["z"] - 1.0) < 1e-6
+    assert abs(position["distance"] - 1.0) < 1e-6
+
+
+def test_depth_localization_rejects_depth_holes():
+    depth = np.zeros((480, 640), dtype=np.uint16)
+    camera_matrix = [600.0, 0.0, 320.0, 0.0, 600.0, 240.0, 0.0, 0.0, 1.0]
+    assert MODULE.estimate_optical_position(
+        {"bbox": [0.25, 0.25, 0.75, 0.75]}, depth, camera_matrix
+    ) is None

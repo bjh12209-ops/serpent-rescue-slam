@@ -63,7 +63,9 @@ class SlamHealthMonitor(Node):
             "RGB": RateTracker("RGB", True, 0.5),
             "DEPTH": RateTracker("DEPTH", True, 0.5),
             "VO": RateTracker("VO", True, 0.5),
-            "IMU": RateTracker("IMU", expect_imu, 0.5),
+            "IMU50": RateTracker("IMU50", expect_imu, 0.5),
+            "IMU51": RateTracker("IMU51", expect_imu, 0.5),
+            "IMU52": RateTracker("IMU52", expect_imu, 0.5),
             "EKF": RateTracker("EKF", expect_ekf, 0.5),
             "SLAM": RateTracker("SLAM", True, 2.0),
         }
@@ -87,12 +89,13 @@ class SlamHealthMonitor(Node):
             lambda _: self.trackers["VO"].tick(),
             qos,
         )
-        self.create_subscription(
-            Imu,
-            "/imu_52/data",
-            lambda _: self.trackers["IMU"].tick(),
-            qos,
-        )
+        for sensor_id in ("50", "51", "52"):
+            self.create_subscription(
+                Imu,
+                f"/imu_{sensor_id}/data",
+                lambda _, key=f"IMU{sensor_id}": self.trackers[key].tick(),
+                qos,
+            )
         self.create_subscription(
             Odometry,
             "/odometry/filtered",
@@ -172,7 +175,12 @@ class SlamHealthMonitor(Node):
         lines = [
             f"RGB {self.display_rate('RGB')} | DEPTH {self.display_rate('DEPTH')}",
             f"VO {self.display_rate('VO')} | SLAM {self.display_rate('SLAM')}",
-            f"IMU {self.display_rate('IMU')} | EKF {self.display_rate('EKF')} Hz",
+            (
+                f"IMU50 {self.display_rate('IMU50')} | "
+                f"IMU51 {self.display_rate('IMU51')} | "
+                f"IMU52 {self.display_rate('IMU52')} Hz"
+            ),
+            f"EKF {self.display_rate('EKF')} Hz",
         ]
         summary = "\n".join(lines)
         self.summary_publisher.publish(String(data=summary))

@@ -7,7 +7,7 @@ rgbd_odometry:
     publish_tf: false
     wait_for_transform: 0.2
     # Start visual odometry even if the external RS485 IMU is unplugged.
-    # When /imu_52/data is available it is still consumed for orientation,
+    # When /imu_50/data is available it is still consumed for orientation,
     # but an IMU cable/driver failure must not block the entire SLAM chain.
     wait_imu_to_init: false
     always_check_imu_tf: false
@@ -17,14 +17,18 @@ rgbd_odometry:
     # completely, so pair only frames that are at most 20 ms apart.
     approx_sync: true
     approx_sync_max_interval: 0.02
-    topic_queue_size: 10
-    sync_queue_size: 20
+    # Keep latency bounded under motion. Old RGB-D pairs are less useful than
+    # the newest pair and must not accumulate behind CPU-heavy mapping work.
+    topic_queue_size: 5
+    sync_queue_size: 8
     qos: 2
     qos_camera_info: 2
     qos_imu: 1
 
     Odom/Strategy: "0"
-    Odom/ResetCountdown: "1"
-    OdomF2M/MaxSize: "1500"
+    # Auto-reset was feeding the EKF's odom->base_link TF back into visual
+    # odometry on every brief feature loss. Disable that reset loop.
+    Odom/ResetCountdown: "0"
+    OdomF2M/MaxSize: "1000"
     Vis/MinInliers: "15"
     Vis/MaxDepth: "5.0"

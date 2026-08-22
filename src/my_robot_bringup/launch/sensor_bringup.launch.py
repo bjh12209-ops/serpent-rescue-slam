@@ -16,20 +16,20 @@ def generate_launch_description():
     ) / "launch" / "wt901c485.launch.py"
 
     extrinsic_arguments = [
-        # Temporary sensor-box convention: base_link is colocated with the IMU.
-        # The D435 is mounted 5 cm forward with matching REP-103 axes.
-        DeclareLaunchArgument("camera_x", default_value="0.05"),
+        # Camera is the head/base reference. IMU 0x50 is measured 5 cm behind
+        # and 2 cm above it, with matching REP-103 axes.
+        DeclareLaunchArgument("camera_x", default_value="0.0"),
         DeclareLaunchArgument("camera_y", default_value="0.0"),
         DeclareLaunchArgument("camera_z", default_value="0.0"),
         DeclareLaunchArgument("camera_roll", default_value="0.0"),
         DeclareLaunchArgument("camera_pitch", default_value="0.0"),
         DeclareLaunchArgument("camera_yaw", default_value="0.0"),
-        DeclareLaunchArgument("imu_x", default_value="0.0"),
-        DeclareLaunchArgument("imu_y", default_value="0.0"),
-        DeclareLaunchArgument("imu_z", default_value="0.0"),
-        DeclareLaunchArgument("imu_roll", default_value="0.0"),
-        DeclareLaunchArgument("imu_pitch", default_value="0.0"),
-        DeclareLaunchArgument("imu_yaw", default_value="0.0"),
+        DeclareLaunchArgument("head_imu_x", default_value="-0.05"),
+        DeclareLaunchArgument("head_imu_y", default_value="0.0"),
+        DeclareLaunchArgument("head_imu_z", default_value="0.02"),
+        DeclareLaunchArgument("head_imu_roll", default_value="0.0"),
+        DeclareLaunchArgument("head_imu_pitch", default_value="0.0"),
+        DeclareLaunchArgument("head_imu_yaw", default_value="0.0"),
     ]
 
     return LaunchDescription([
@@ -90,17 +90,17 @@ def generate_launch_description():
         Node(
             package="tf2_ros",
             executable="static_transform_publisher",
-            name="base_to_imu_tf",
+            name="camera_to_head_imu_tf",
             condition=IfCondition(LaunchConfiguration("use_imu")),
             arguments=[
-                "--x", LaunchConfiguration("imu_x"),
-                "--y", LaunchConfiguration("imu_y"),
-                "--z", LaunchConfiguration("imu_z"),
-                "--roll", LaunchConfiguration("imu_roll"),
-                "--pitch", LaunchConfiguration("imu_pitch"),
-                "--yaw", LaunchConfiguration("imu_yaw"),
-                "--frame-id", "base_link",
-                "--child-frame-id", "imu_52_link",
+                "--x", LaunchConfiguration("head_imu_x"),
+                "--y", LaunchConfiguration("head_imu_y"),
+                "--z", LaunchConfiguration("head_imu_z"),
+                "--roll", LaunchConfiguration("head_imu_roll"),
+                "--pitch", LaunchConfiguration("head_imu_pitch"),
+                "--yaw", LaunchConfiguration("head_imu_yaw"),
+                "--frame-id", "camera_link",
+                "--child-frame-id", "imu_50_link",
             ],
         ),
     ])

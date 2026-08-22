@@ -26,7 +26,7 @@ def generate_launch_description():
                 ("rgb/image", "/camera/camera/color/image_raw"),
                 ("depth/image", "/camera/camera/aligned_depth_to_color/image_raw"),
                 ("rgb/camera_info", "/camera/camera/color/camera_info"),
-                ("imu", "/imu_52/data"),
+                ("imu", "/imu_50/data"),
                 ("odom", "/visual_odom"),
             ],
         ),

@@ -11,7 +11,7 @@ python3 -m http.server 8080 --directory apps/mission_control_ui
 ```
 
 브라우저에서 `http://localhost:8080`을 연다. 지도 드래그, 휠 확대/축소,
-로봇 추적, 2D/3D 전환을 사용할 수 있다.
+로봇 추적, 2D/3D 전환과 3-IMU `SNAKE POSE` 화면을 사용할 수 있다.
 
 ## 실제 ROS 2 연결
 
@@ -24,7 +24,7 @@ source install/setup.bash
 ros2 launch my_robot_bringup mission_control.launch.py
 ```
 
-기본 PC 고해상도 프로필은 2D 셀 5 cm, 유효 3D 점 최대 50,000개,
+기본 PC 프로필은 2D 셀 5 cm, 유효 3D 점 최대 30,000개,
 높이 -1.5~3.0 m를 전송한다. 성능이 부족한 SBC에서는 실행 인자로 낮출 수 있다.
 
 ```bash
@@ -94,7 +94,11 @@ gateway가 ROS 메시지를 아래의 작은 JSON 이벤트로 변환해야 한�
     "rates": {
       "RGB": {"value": 29.8, "expected": 30, "ok": true},
       "DEPTH": {"value": 29.7, "expected": 30, "ok": true}
-    }
+    },
+    "imus": {
+      "50": {"online": true, "role": "HEAD", "quaternion": {"x": 0, "y": 0, "z": 0, "w": 1}}
+    },
+    "snakeModel": {"moduleCount": 7, "activeModules": []}
   },
   "map": {
     "cellSize": 0.12,
@@ -115,24 +119,31 @@ gateway가 ROS 메시지를 아래의 작은 JSON 이벤트로 변환해야 한�
 {"type":"event","level":"warning","message":"사람 후보 A-01 감지"}
 ```
 
-실제 gateway는 다음 이벤트도 보낸다.
+실제 gateway는 다음 이벤트도 보낸다. 3D 점군은 큰 JSON 배열 대신
+`SPC1 + uint32 count + float32 XYZ/RGB` 이진 프레임으로 보낸다.
 
 ```json
 {"type":"map","map":{"cellSize":0.12,"known":[[0,0]],"occupied":[[1,0]]},"mapNodes":42}
-{"type":"cloud","points":[[1.2,-0.3,0.8],[1.3,-0.3,0.9]]}
 {"type":"camera","mime":"image/jpeg","data":"<base64>","stamp":1786280000.0}
 {"type":"segment_poses","poses":[{"x":0.0,"y":0.0,"z":0.1,"yaw":0.0}]}
+{"type":"imu","imu":{"sensorId":"50","displayId":"0x50","role":"HEAD","online":true,"quaternion":{"x":0,"y":0,"z":0,"w":1},"eulerDeg":{"roll":0,"pitch":0,"yaw":0}}}
 ```
 
 - `/map`이 있으면 2D의 탐색 영역과 점유 셀을 표시한다.
-- `/cloud_map`이 있으면 3D 탭에 RGB가 보존된 실제 점군을 최대 50,000점까지 표시한다.
-- 3D 탭은 WebGL로 그리며 좌클릭 회전, 우클릭 이동, 휠 확대/축소와
-  TOP/FRONT/SIDE/FIT 보기를 지원한다. 외부 CDN은 사용하지 않는다.
-- D435 RGB는 기본 20 FPS, 640 px, JPEG 품질 70의 별도 MJPEG로 표시한다.
-- `/snake/segment_poses`는 향후 3개 IMU와 관절 상태로 추정한 뱀 몸체를
-  표시하기 위한 확장 입력이다. 현재 자세 추정 노드는 아직 구현하지 않았다.
+- `/cloud_map`이 있으면 3D 탭에 RGB가 보존된 실제 점군을 최대 30,000점까지 표시한다.
+- 비어 있거나 기존 정상 지도 대비 12% 미만으로 급감한 일시적 cloud 메시지는
+  직전 정상 지도를 지우지 않는다. DB 초기화는 작업 메모리(`/info.wm_state`)가
+  아니라 전체 `/mapGraph`의 ID 재시작으로만 판별한다.
+- 3D 탭은 WebGL로 그리며 좌클릭 orbit, 우클릭/Shift 3축 pan, 휠 zoom과
+  TOP/FRONT/SIDE/FIT/RESET 보기를 지원한다. 탭 전환 후 카메라 상태도 유지한다.
+- D435 RGB는 최대 20 FPS, 640 px, JPEG 품질 65의 별도 MJPEG로 표시한다.
+- `/imu_50/data`, `/imu_51/data`, `/imu_52/data`의 쿼터니언은 각각 HEAD,
+  MIDDLE, TAIL 모듈을 구동한다. `SNAKE POSE`에서 모듈 박스, 연결선과 RGB
+  local axis를 표시한다. 0x51/0x52 모듈 간격은 측정 전까지 UI 전용이다.
+- `/snake/segment_poses`는 향후 관절 구조까지 반영한 estimator를 위한 기존
+  확장 입력으로 유지한다.
 
-주행거리는 `/visual_odom`을 2.5 cm 공간 deadband와 1.0 m/s 물리 속도
+주행거리는 `/visual_odom`을 2.5 cm 공간 deadband와 2.5 m/s 물리 속도
 제한으로 필터링한다. UI의 `필터 주행거리`는 XY 누적값이고, `3D 주행거리`는
 경사와 높이 변화를 포함하며, `SLAM 보정거리`는 `/mapPath`의 루프 폐쇄 보정
 결과다. IMU 가속도를 이중 적분하지 않는다.
@@ -140,9 +151,10 @@ gateway가 ROS 메시지를 아래의 작은 JSON 이벤트로 변환해야 한�
 ## 사람 말단부 YOLO Pose
 
 사람 검출은 `/perception/person_detection` JSON만 UI로 전달한다. 공식
-`yolo26n-pose.pt`는 클래스가 `person` 하나뿐이고, 앱은 17개 COCO 키포인트
-중 손목과 발목이 일정 신뢰도 이상 보이는 사람만 표시한다. 자동차나 의자 등
-다른 객체는 전달하지 않는다.
+`yolo26n-pose.pt`는 클래스가 `person` 하나뿐이다. 기본 모드는 사람 몸체가
+보이면 표시하고, 보이는 손목·발목 키포인트도 함께 전달한다. 자동차나 의자 등
+다른 객체는 전달하지 않는다. `yolo_require_extremity:=true`를 주면 손목 또는
+발목이 보이는 후보만 통과시킬 수 있다.
 
 새 x86 PC에서 한 번만 CPU 전용 환경을 만든다. 현재 개발 PC에는 이미
 `.venv-yolo`와 공식 nano Pose 모델이 준비되어 있다.
@@ -160,17 +172,17 @@ python3 -m venv --system-site-packages .venv-yolo
 ```bash
 cd ~/ros2_ws
 source /opt/ros/humble/setup.bash
-source .venv-yolo/bin/activate
 source install/setup.bash
 
 ros2 launch my_robot_bringup mission_control.launch.py \
-  enable_person_detection:=true \
   yolo_model:=$PWD/yolo26n-pose.pt \
-  yolo_device:=cpu yolo_image_size:=416 yolo_rate:=5.0
+  yolo_device:=cpu yolo_image_size:=320 yolo_rate:=2.0
 ```
 
-추론은 별도 작업 스레드에서 최신 카메라 프레임 하나만 유지하므로 처리가
-느려져도 카메라 큐가 누적되지 않는다. 2회 연속 검출해야 표시하고 3회 연속
+gateway가 원본을 320 px, 2 Hz `/mission_control/yolo_input`으로 축소한다.
+추론은 별도 작업 스레드에서 최신 프레임 하나만 유지하므로 처리가
+느려져도 카메라 큐가 누적되지 않는다. YOLO 가상환경과 모델은 알려진 작업공간
+경로에서 자동 탐색한다. 2회 연속 검출해야 표시하고 3회 연속
 미검출해야 해제해 UI 깜빡임도 억제한다.
 
 COCO Pose는 손목과 발목까지만 제공하고 손가락 관절은 제공하지 않는다.

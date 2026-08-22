@@ -24,7 +24,7 @@
 
 html,
 body {
-  min-width: 1180px;
+  min-width: 0;
   min-height: 720px;
   margin: 0;
   background:
@@ -217,7 +217,8 @@ h1 span {
 
 .dashboard {
   display: grid;
-  grid-template-columns: 258px minmax(500px, 1fr) 294px;
+  grid-template-columns: 248px minmax(520px, 1fr) minmax(340px, 24vw);
+  grid-template-areas: "left map right";
   gap: 12px;
   min-height: 0;
   padding-top: 12px;
@@ -229,6 +230,20 @@ h1 span {
   flex-direction: column;
   gap: 12px;
   min-height: 0;
+}
+
+.left-rail {
+  grid-area: left;
+  overflow-y: auto;
+  scrollbar-color: rgba(84, 245, 169, 0.2) transparent;
+}
+
+.map-panel { grid-area: map; }
+
+.right-rail {
+  grid-area: right;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
 }
 
 .panel {
@@ -393,8 +408,8 @@ small {
 }
 
 .health-panel {
-  flex: 1;
-  min-height: 212px;
+  flex: 0 0 auto;
+  min-height: 244px;
 }
 
 .health-summary {
@@ -559,6 +574,7 @@ small {
 
 #mapCanvas,
 #cloudCanvas,
+#snakeCanvas,
 #cameraCanvas {
   display: block;
   width: 100%;
@@ -572,9 +588,34 @@ small {
   touch-action: none;
 }
 
-#cloudCanvas.dragging { cursor: grabbing; }
+#snakeCanvas {
+  position: absolute;
+  inset: 0;
+  cursor: grab;
+  touch-action: none;
+}
+
+#cloudCanvas.dragging,
+#snakeCanvas.dragging { cursor: grabbing; }
 #mapCanvas.hidden-view,
-#cloudCanvas.hidden-view { display: none; }
+#cloudCanvas.hidden-view,
+#snakeCanvas.hidden-view { display: none; }
+
+.target-map-label {
+  position: absolute;
+  z-index: 5;
+  padding: 4px 6px;
+  border: 1px solid rgba(255, 209, 102, 0.72);
+  border-radius: 2px;
+  background: rgba(24, 23, 13, 0.88);
+  color: #ffd166;
+  font: 700 9px ui-monospace, SFMono-Regular, Menlo, monospace;
+  pointer-events: none;
+  transform: translate(9px, -115%);
+  white-space: nowrap;
+}
+
+.target-map-label.hidden { display: none; }
 
 .orbit-help {
   position: absolute;
@@ -594,6 +635,59 @@ small {
 }
 
 .orbit-help.hidden { display: none; }
+
+.map-stage.snake-mode .map-corner,
+.map-stage.snake-mode .map-message { display: none; }
+
+.imu-pose-panel {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 4;
+  width: min(360px, 42%);
+  padding: 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: rgba(6, 12, 13, 0.88);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.38);
+  backdrop-filter: blur(10px);
+}
+
+.imu-pose-panel.hidden { display: none; }
+
+.imu-pose-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--green);
+  font: 700 9px ui-monospace, monospace;
+}
+
+.imu-pose-heading small { font-size: 7px; text-align: right; }
+
+.imu-card-grid {
+  display: grid;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.imu-card {
+  display: grid;
+  grid-template-columns: 74px 1fr;
+  gap: 7px;
+  padding: 7px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.imu-card header { font: 700 9px ui-monospace, monospace; }
+.imu-card header span { display: block; margin-top: 3px; color: var(--muted); font-size: 7px; }
+.imu-card header i { display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: var(--red); }
+.imu-card.online header i { background: var(--green); box-shadow: 0 0 8px var(--green); }
+.imu-values { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; color: #c8d6d1; font: 8px ui-monospace, monospace; }
+.imu-values span { color: var(--muted); }
+.imu-quaternion { grid-column: 1 / -1; color: #73857f; font: 7px ui-monospace, monospace; }
+.imu-pose-panel > p { margin: 8px 0 0; color: #71817c; font-size: 8px; line-height: 1.45; }
 
 .scan-overlay {
   position: absolute;
@@ -708,7 +802,8 @@ small {
 .map-footer strong { display: block; margin-top: 3px; color: #bdcbc6; font: 11px ui-monospace, monospace; }
 
 .camera-panel {
-  height: 218px;
+  height: auto;
+  min-height: 0;
 }
 
 .camera-heading {
@@ -777,7 +872,7 @@ small {
 }
 
 .target-panel {
-  min-height: 180px;
+  min-height: 0;
 }
 
 .panel-title-row > span:not(.frame-tag):not(.demo-tag):not(.health-summary) {
@@ -817,8 +912,8 @@ small {
 .target-card button { width: 100%; padding: 6px; color: var(--yellow); font-size: 9px; }
 
 .event-panel {
-  flex: 1;
-  min-height: 170px;
+  flex: 1 0 150px;
+  min-height: 150px;
 }
 
 .event-panel button {
@@ -896,10 +991,38 @@ small {
 }
 
 @media (max-height: 820px) {
-  .dashboard { grid-template-columns: 244px minmax(500px, 1fr) 274px; }
+  .dashboard { grid-template-columns: 230px minmax(500px, 1fr) minmax(320px, 25vw); }
   .mission-panel, .metrics-panel, .health-panel, .system-panel, .target-panel, .event-panel { padding: 11px; }
-  .camera-panel { height: 190px; }
-  .target-panel { min-height: 150px; }
   .metric-grid > div { padding: 7px; }
   .rate-list { gap: 5px; }
+}
+
+@media (max-width: 1180px) {
+  html, body { min-height: 0; overflow: auto; }
+  .app-shell { height: auto; min-height: 100vh; }
+  .dashboard {
+    grid-template-columns: minmax(520px, 1fr) minmax(320px, 38vw);
+    grid-template-areas: "map right" "left left";
+  }
+  .map-panel, .right-rail { min-height: 680px; }
+  .left-rail {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(220px, 1fr));
+    overflow: visible;
+  }
+  .estop-button { min-height: 52px; }
+}
+
+@media (max-width: 860px) {
+  .app-shell { padding: 0 10px 10px; }
+  .brand-block h1 span, .mission-clock { display: none; }
+  .dashboard {
+    grid-template-columns: 1fr;
+    grid-template-areas: "map" "right" "left";
+  }
+  .map-panel { min-height: 620px; }
+  .right-rail { min-height: 740px; }
+  .left-rail { grid-template-columns: 1fr; }
+  .imu-pose-panel { width: calc(100% - 28px); max-height: 42%; overflow-y: auto; }
+  .view-tab { padding: 0 8px; font-size: 8px; }
 }

@@ -3,12 +3,12 @@
 ## 현재 프로파일
 
 - D435 RGB/aligned depth: `640x480x30`
-- WT901C485 `0x52`: 약 60 Hz
+- WT901C485 `0x50`/`0x51`/`0x52`: 각각 약 45 Hz 목표
 - RGB-D visual odometry: 카메라 입력 속도에 근접
-- EKF: 60 Hz
-- RTAB-Map 지도/그래프 갱신: 융합 5 Hz, 카메라 전용 3 Hz
+- EKF: 45 Hz
+- RTAB-Map 지도/그래프 갱신: 융합/카메라 전용 2 Hz
 - 3D occupancy cell: 3 cm
-- 임시 TF: `base_link -> camera_link` x `+0.05 m`, 회전 0
+- 임시 TF: `camera_link -> imu_50_link = (-0.05, 0, +0.02) m`, 회전 0
 
 30 Hz는 센서와 odometry 목표 주기다. 누적 3D 지도 생성, 특징 비교와
 loop closure를 매 프레임 수행하면 CPU, DB와 네트워크 사용량만 크게
@@ -77,6 +77,8 @@ IMU가 보완하지 못하므로 실기 최종 형태로 간주하지 않는다.
 ros2 topic hz /camera/camera/color/image_raw
 ros2 topic hz /camera/camera/aligned_depth_to_color/image_raw
 ros2 topic hz /visual_odom
+ros2 topic hz /imu_50/data
+ros2 topic hz /imu_51/data
 ros2 topic hz /imu_52/data
 ros2 topic hz /odometry/filtered
 
@@ -88,7 +90,7 @@ ros2 topic echo /slam/diagnostics
 ros2 run tf2_ros tf2_echo map base_link
 ```
 
-카메라 전용 모드에는 `/imu_52/data`와 `/odometry/filtered`가 없는 것이
+카메라 전용 모드에는 `/imu_50/data`~`/imu_52/data`와 `/odometry/filtered`가 없는 것이
 정상이다. 누적 지도 입력은 `/mapData`, 2D 점유 지도는 구독자가 있을 때
 `/map`으로 발행된다.
 
@@ -101,7 +103,7 @@ ros2 run tf2_ros tf2_echo map odom
 ros2 run tf2_ros tf2_echo odom base_link
 ```
 
-`/mapData`가 3~5 Hz인 것은 설정대로 정상이다. 카메라 토픽까지 그 속도로
+`/mapData`가 약 2 Hz인 것은 설정대로 정상이다. 카메라 토픽까지 그 속도로
 떨어졌다는 뜻은 아니다.
 
 ## 5. 주행 방법
@@ -128,7 +130,7 @@ ros2 bag record \
   /camera/camera/color/image_raw \
   /camera/camera/color/camera_info \
   /camera/camera/aligned_depth_to_color/image_raw \
-  /imu_52/data /visual_odom /odometry/filtered \
+  /imu_50/data /imu_51/data /imu_52/data /visual_odom /odometry/filtered \
   /slam/current_pose /slam/path \
   /tf /tf_static
 ```

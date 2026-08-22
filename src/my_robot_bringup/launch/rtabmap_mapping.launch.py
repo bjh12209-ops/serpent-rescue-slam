@@ -27,13 +27,16 @@ def generate_launch_description():
         ("rgb/image", "/camera/camera/color/image_raw"),
         ("depth/image", "/camera/camera/aligned_depth_to_color/image_raw"),
         ("rgb/camera_info", "/camera/camera/color/camera_info"),
-        ("imu", "/imu_52/data"),
+        ("imu", "/imu_50/data"),
+        ("odom", "/odometry/filtered"),
     ]
 
     return LaunchDescription([
         DeclareLaunchArgument(
             "database_path",
-            default_value="~/.ros/online_slam.db",
+            # Keep the previous default file intact. A malformed SQLite DB
+            # should not make every no-argument mapping launch crash.
+            default_value="~/.ros/online_slam_optimized.db",
             description="RTAB-Map database to create or continue.",
         ),
         DeclareLaunchArgument(
@@ -84,10 +87,7 @@ def generate_launch_description():
             output="screen",
             condition=IfCondition(LaunchConfiguration("rtabmap_viz")),
             parameters=[rtabmap_params],
-            remappings=[
-                *common_remappings,
-                ("odom", "/odometry/filtered"),
-            ],
+            remappings=common_remappings,
         ),
         Node(
             package="my_robot_bringup",

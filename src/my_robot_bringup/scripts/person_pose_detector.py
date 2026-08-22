@@ -1,17 +1,26 @@
 #!/usr/bin/env python3
-"""Detect only people with visible extremities using an Ultralytics YOLO model."""
+"""Detect people and localize them with aligned D435 depth and ROS TF."""
 
+from collections import deque
 import json
+import math
 from pathlib import Path
+import sys
 import threading
 import time
 
 from cv_bridge import CvBridge
+from geometry_msgs.msg import PointStamped
+import numpy as np
 import rclpy
+from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import Image
+from rclpy.time import Time
+from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import String
+from tf2_geometry_msgs import do_transform_point
+from tf2_ros import Buffer, TransformException, TransformListener
 
 
 COCO_EXTREMITIES = {
@@ -20,6 +29,70 @@ COCO_EXTREMITIES = {
     15: "왼발목",
     16: "오른발목",
 }
+
+
+def project_root():
+    """Return the repository root for source and symlink installs."""
+    return Path(__file__).resolve().parents[3]
+
+
+def yolo_site_package_candidates(configured=""):
+    """Return portable virtualenv package paths without hard-coding one PC."""
+    version = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    roots = []
+    if configured:
+        configured_path = Path(configured).expanduser()
+        if configured_path.name == "site-packages":
+            yield configured_path
+        else:
+            roots.append(configured_path)
+    roots.extend([
+        project_root() / ".venv-yolo",
+        Path.cwd() / ".venv-yolo",
+        Path.home() / "ros2_ws" / ".venv-yolo",
+    ])
+    seen = set()
+    for root in roots:
+        candidate = root / "lib" / version / "site-packages"
+        resolved = str(candidate.resolve())
+        if resolved not in seen:
+            seen.add(resolved)
+            yield candidate
+
+
+def import_yolo(configured_site_packages=""):
+    """Import Ultralytics, falling back to the project's YOLO virtualenv."""
+    try:
+        from ultralytics import YOLO
+        return YOLO
+    except ImportError as original_error:
+        for candidate in yolo_site_package_candidates(configured_site_packages):
+            if not candidate.is_dir():
+                continue
+            sys.path.insert(0, str(candidate))
+            try:
+                from ultralytics import YOLO
+                return YOLO
+            except ImportError:
+                continue
+        raise original_error
+
+
+def resolve_model_path(configured_model):
+    """Find a local model in common workspace locations before downloading."""
+    expanded = Path(configured_model).expanduser()
+    if expanded.is_file() or expanded.parent != Path("."):
+        return str(expanded)
+    candidates = [
+        Path.cwd() / configured_model,
+        project_root() / configured_model,
+        Path.home() / "ros2_ws" / configured_model,
+        Path.home() / configured_model,
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    return configured_model
 
 
 def clamp(value, minimum=0.0, maximum=1.0):
@@ -103,6 +176,67 @@ def build_person_candidates(
     return candidates
 
 
+def estimate_optical_position(
+    candidate,
+    depth_image,
+    camera_matrix,
+    depth_scale=0.001,
+    minimum_depth=0.2,
+    maximum_depth=6.0,
+):
+    """
+    Estimate a robust person center in the camera optical frame.
+
+    The central torso portion of the YOLO box is used instead of a single
+    pixel, which rejects depth holes and most background around limbs.
+    """
+    if depth_image is None or depth_image.ndim != 2:
+        return None
+    bbox = candidate.get("bbox", [])
+    if len(bbox) != 4 or len(camera_matrix) < 9:
+        return None
+    height, width = depth_image.shape
+    x1, y1, x2, y2 = [clamp(value) for value in bbox]
+    if x2 <= x1 or y2 <= y1:
+        return None
+    box_width = x2 - x1
+    box_height = y2 - y1
+    roi_x1 = max(0, int((x1 + 0.25 * box_width) * width))
+    roi_x2 = min(width, int((x2 - 0.25 * box_width) * width) + 1)
+    roi_y1 = max(0, int((y1 + 0.20 * box_height) * height))
+    roi_y2 = min(height, int((y2 - 0.20 * box_height) * height) + 1)
+    if roi_x2 <= roi_x1 or roi_y2 <= roi_y1:
+        return None
+    roi_meters = depth_image[roi_y1:roi_y2, roi_x1:roi_x2].astype(
+        np.float32, copy=False
+    ) * float(depth_scale)
+    valid = roi_meters[
+        np.isfinite(roi_meters)
+        & (roi_meters >= float(minimum_depth))
+        & (roi_meters <= float(maximum_depth))
+    ]
+    if valid.size < 12:
+        return None
+    depth = float(np.median(valid))
+    u = (x1 + x2) * 0.5 * width
+    v = (y1 + y2) * 0.5 * height
+    fx = float(camera_matrix[0])
+    fy = float(camera_matrix[4])
+    cx = float(camera_matrix[2])
+    cy = float(camera_matrix[5])
+    if fx <= 0.0 or fy <= 0.0:
+        return None
+    x = (u - cx) * depth / fx
+    y = (v - cy) * depth / fy
+    return {
+        "x": x,
+        "y": y,
+        "z": depth,
+        "distance": math.sqrt(x * x + y * y + depth * depth),
+        "samples": int(valid.size),
+    }
+
+
 class DetectionDebouncer:
     """Require consecutive frames to confirm and clear person detections."""
 
@@ -133,14 +267,27 @@ class PersonPoseDetector(Node):
 
     def __init__(self):
         super().__init__("person_pose_detector")
-        self.declare_parameter("image_topic", "/camera/camera/color/image_raw")
+        self.declare_parameter("image_topic", "/mission_control/yolo_input")
+        self.declare_parameter(
+            "depth_topic",
+            "/camera/camera/aligned_depth_to_color/image_raw",
+        )
+        self.declare_parameter(
+            "camera_info_topic", "/camera/camera/color/camera_info"
+        )
+        self.declare_parameter("map_frame", "map")
+        self.declare_parameter("depth_scale", 0.001)
+        self.declare_parameter("minimum_depth", 0.2)
+        self.declare_parameter("maximum_depth", 6.0)
+        self.declare_parameter("maximum_depth_time_error", 0.12)
         self.declare_parameter("model", "yolo26n-pose.pt")
         self.declare_parameter("device", "cpu")
         self.declare_parameter("image_size", 416)
-        self.declare_parameter("confidence", 0.35)
-        self.declare_parameter("keypoint_confidence", 0.30)
-        self.declare_parameter("max_inference_rate", 5.0)
-        self.declare_parameter("require_extremity", True)
+        self.declare_parameter("confidence", 0.25)
+        self.declare_parameter("keypoint_confidence", 0.25)
+        self.declare_parameter("max_inference_rate", 2.0)
+        self.declare_parameter("require_extremity", False)
+        self.declare_parameter("python_site_packages", "")
         self.declare_parameter("confirm_frames", 2)
         self.declare_parameter("clear_frames", 3)
         self.declare_parameter(
@@ -151,6 +298,9 @@ class PersonPoseDetector(Node):
         self.frame_lock = threading.Lock()
         self.frame_event = threading.Event()
         self.latest_message = None
+        self.depth_lock = threading.Lock()
+        self.depth_messages = deque(maxlen=8)
+        self.camera_info = None
         self.running = True
         self.model_ready = False
         self.model_error = "YOLO model is loading"
@@ -161,6 +311,8 @@ class PersonPoseDetector(Node):
             self.get_parameter("confirm_frames").value,
             self.get_parameter("clear_frames").value,
         )
+        self.tf_buffer = Buffer(cache_time=Duration(seconds=10.0))
+        self.tf_listener = TransformListener(self.tf_buffer, self)
 
         self.publisher = self.create_publisher(
             String, "/perception/person_detection", 10
@@ -169,6 +321,18 @@ class PersonPoseDetector(Node):
             Image,
             str(self.get_parameter("image_topic").value),
             self.image_callback,
+            qos_profile_sensor_data,
+        )
+        self.create_subscription(
+            Image,
+            str(self.get_parameter("depth_topic").value),
+            self.depth_callback,
+            qos_profile_sensor_data,
+        )
+        self.create_subscription(
+            CameraInfo,
+            str(self.get_parameter("camera_info_topic").value),
+            self.camera_info_callback,
             qos_profile_sensor_data,
         )
         self.create_timer(2.0, self.publish_status_if_idle)
@@ -185,6 +349,115 @@ class PersonPoseDetector(Node):
             self.latest_message = message
             self.frame_event.set()
 
+    def depth_callback(self, message):
+        """Keep a short depth history for timestamp matching after inference."""
+        with self.depth_lock:
+            self.depth_messages.append(message)
+
+    def camera_info_callback(self, message):
+        """Keep the color intrinsics used by aligned depth."""
+        with self.depth_lock:
+            self.camera_info = message
+
+    @staticmethod
+    def stamp_seconds(stamp):
+        """Convert a ROS builtin time message to floating-point seconds."""
+        return float(stamp.sec) + float(stamp.nanosec) * 1e-9
+
+    def closest_depth(self, stamp):
+        """Return depth and intrinsics closest to the inferred RGB frame."""
+        requested = self.stamp_seconds(stamp)
+        with self.depth_lock:
+            messages = tuple(self.depth_messages)
+            camera_info = self.camera_info
+        if not messages or camera_info is None:
+            return None, None
+        message = min(
+            messages,
+            key=lambda item: abs(
+                self.stamp_seconds(item.header.stamp) - requested
+            ),
+        )
+        time_error = abs(
+            self.stamp_seconds(message.header.stamp) - requested
+        )
+        maximum_error = float(
+            self.get_parameter("maximum_depth_time_error").value
+        )
+        if time_error > maximum_error:
+            return None, camera_info
+        return message, camera_info
+
+    def localize_candidates(self, candidates, rgb_stamp):
+        """Add camera distance and map-frame position to detected people."""
+        if not candidates:
+            return candidates
+        depth_message, camera_info = self.closest_depth(rgb_stamp)
+        if depth_message is None or camera_info is None:
+            return candidates
+        try:
+            depth_image = self.bridge.imgmsg_to_cv2(
+                depth_message, desired_encoding="passthrough"
+            )
+        except Exception as error:
+            self.get_logger().warning(
+                f"Person depth conversion failed: {error}",
+                throttle_duration_sec=5.0,
+            )
+            return candidates
+
+        map_frame = str(self.get_parameter("map_frame").value)
+        transform = None
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                map_frame,
+                depth_message.header.frame_id,
+                Time.from_msg(depth_message.header.stamp),
+                timeout=Duration(seconds=0.1),
+            )
+        except TransformException as error:
+            self.get_logger().warning(
+                f"Person map transform unavailable: {error}",
+                throttle_duration_sec=5.0,
+            )
+
+        for candidate in candidates:
+            position = estimate_optical_position(
+                candidate,
+                np.asarray(depth_image),
+                camera_info.k,
+                depth_scale=float(self.get_parameter("depth_scale").value),
+                minimum_depth=float(
+                    self.get_parameter("minimum_depth").value
+                ),
+                maximum_depth=float(
+                    self.get_parameter("maximum_depth").value
+                ),
+            )
+            if position is None:
+                candidate["depthValid"] = False
+                continue
+            candidate["depthValid"] = True
+            candidate["distanceMeters"] = round(position["distance"], 2)
+            candidate["cameraPosition"] = {
+                axis: round(position[axis], 3) for axis in ("x", "y", "z")
+            }
+            if transform is None:
+                continue
+            camera_point = PointStamped()
+            camera_point.header = depth_message.header
+            camera_point.point.x = position["x"]
+            camera_point.point.y = position["y"]
+            camera_point.point.z = position["z"]
+            map_point = do_transform_point(camera_point, transform)
+            candidate["mapPosition"] = {
+                "x": round(float(map_point.point.x), 3),
+                "y": round(float(map_point.point.y), 3),
+                "z": round(float(map_point.point.z), 3),
+                "frameId": map_frame,
+            }
+        return candidates
+
     def take_latest_message(self):
         """Atomically consume the newest camera message."""
         with self.frame_lock:
@@ -196,7 +469,9 @@ class PersonPoseDetector(Node):
     def worker_main(self):
         """Load YOLO and infer in a non-ROS worker thread."""
         try:
-            from ultralytics import YOLO
+            YOLO = import_yolo(
+                str(self.get_parameter("python_site_packages").value)
+            )
         except ImportError:
             self.model_error = (
                 "ultralytics is not installed; see my_robot_bringup README"
@@ -205,9 +480,7 @@ class PersonPoseDetector(Node):
             return
 
         configured_model = str(self.get_parameter("model").value)
-        model_path = str(Path(configured_model).expanduser())
-        if "/" not in configured_model and not configured_model.startswith("."):
-            model_path = configured_model
+        model_path = resolve_model_path(configured_model)
         try:
             model = YOLO(model_path)
         except Exception as error:  # model loaders raise backend-specific errors
@@ -218,7 +491,7 @@ class PersonPoseDetector(Node):
         self.model_ready = True
         self.model_error = ""
         self.get_logger().info(
-            f"Person-only YOLO ready: {configured_model}; latest-frame mode"
+            f"Person-only YOLO ready: {model_path}; latest-frame mode"
         )
         inference_period = 1.0 / max(
             float(self.get_parameter("max_inference_rate").value), 0.1
@@ -277,6 +550,9 @@ class PersonPoseDetector(Node):
                         "custom_extremity_classes"
                     ).value,
                 )
+                candidates = self.localize_candidates(
+                    candidates, message.header.stamp
+                )
             except Exception as error:  # inference backends vary by platform
                 self.get_logger().error(
                     f"YOLO inference failed: {error}",
@@ -327,7 +603,10 @@ class PersonPoseDetector(Node):
         self.running = False
         self.frame_event.set()
         if self.worker.is_alive():
-            self.worker.join(timeout=3.0)
+            try:
+                self.worker.join(timeout=3.0)
+            except KeyboardInterrupt:
+                pass
         super().destroy_node()
 
 

@@ -91,6 +91,12 @@ class DistanceAccumulator:
         impossible_jump = self.max_jump > 0.0 and raw_step > self.max_jump
         self.last_stamp = sample_stamp
         if impossible_speed or impossible_jump:
+            # Re-anchor without counting the rejected displacement. Keeping
+            # last_raw at the old pose makes every later sample look like the
+            # same jump and can permanently freeze distance at 0 m.
+            self.last_raw = current
+            self.filtered = current
+            self.accepted = current
             return False
 
         self.last_raw = current
@@ -128,7 +134,7 @@ class SlamTelemetry(Node):
         self.declare_parameter("max_path_points", 20000)
         self.declare_parameter("max_odom_step", 0.5)
         self.declare_parameter("distance_min_step", 0.025)
-        self.declare_parameter("distance_max_speed", 1.0)
+        self.declare_parameter("distance_max_speed", 2.5)
         self.declare_parameter("distance_smoothing_alpha", 0.35)
 
         self.global_frame = self.get_parameter("global_frame").value

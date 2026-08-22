@@ -22,7 +22,7 @@ RViz 화면을 영상으로 캡처해 전송하지 않는다. SLAM 결과를 경
 │          ╰─ 관측하며 밝아지는 영역     │ 누적 주행거리       │
 │                                       │ RGB 30 / Depth 30  │
 │                                       │ VO 30 / SLAM 3     │
-│                                       │ IMU 60 / EKF 60    │
+│                                       │ IMU 45 / EKF 45   │
 ├───────────────────────────────────────┴────────────────────┤
 │ 2D MAP │ 3D MAP │ CAMERA │ TARGETS      [정지] [복귀]     │
 └────────────────────────────────────────────────────────────┘
@@ -55,11 +55,11 @@ RViz 화면을 영상으로 캡처해 전송하지 않는다. SLAM 결과를 경
 | `/slam/distance_from_start` | 출발점 직선거리 m | 2~5 Hz |
 | `/slam/diagnostics` | 각 스트림 Hz/age/상태 | 1 Hz |
 | `/grid_map` | 12 cm로 축약한 점유 셀 | 1 Hz |
-| `/cloud_map` | 최대 12,000점의 3D 점군 | 1 Hz |
-| D435 RGB | 480 px JPEG 영상 | 5 Hz |
+| `/cloud_map` | 최대 30,000점의 이진 3D 점군 | 1 Hz |
+| D435 RGB | 640 px latest-only MJPEG | 최대 20 Hz |
 
 `/mapData` 전체를 브라우저로 반복 전송하지 않는다. 현재 gateway는
-`/grid_map`을 12 cm 셀로 합치고 `/cloud_map`을 최대 12,000점으로 제한해
+`/map`을 5 cm 셀로 합치고 `/cloud_map`을 최대 30,000점으로 제한해
 WebSocket으로 전달한다. 지도가 커져 전체 셀 전송이 부담되는 시점에는 변경
 tile만 보내는 계약으로 확장한다.
 

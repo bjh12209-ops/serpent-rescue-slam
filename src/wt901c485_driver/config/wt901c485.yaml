@@ -3,8 +3,10 @@ wt901c485_node:
     # Use the USB identity instead of ttyUSB0, whose number changes with plug order.
     port: /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
     baud_rate: 115200
-    sensor_ids: [82]  # 0x52 is the only responding sensor on this robot.
-    rate_hz: 60.0
+    # Physical order on the RS-485 bus: 0x50=head, 0x51=middle, 0x52=tail.
+    sensor_ids: [80, 81, 82]
+    # Three sequential Modbus reads reach about 41-45 Hz at 115200 baud.
+    rate_hz: 45.0
     response_timeout_us: 12000
     offline_retry_ms: 1000
     yaw_zero_duration_sec: 2.0

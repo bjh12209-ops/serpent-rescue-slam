@@ -44,6 +44,20 @@ def test_impossible_jump_is_rejected():
     assert accumulator.distance_2d < 0.03
 
 
+def test_distance_recovers_after_rejected_odometry_jump():
+    accumulator = MODULE.DistanceAccumulator(
+        min_step=0.01,
+        max_speed=1.0,
+        max_jump=0.5,
+        smoothing_alpha=1.0,
+    )
+    accumulator.update((0.0, 0.0, 0.0), 0.0)
+    accumulator.update((1.0, 0.0, 0.0), 0.1)  # rejected reset/outlier
+    for index in range(1, 7):
+        accumulator.update((1.0 + index * 0.02, 0.0, 0.0), 0.1 + index * 0.1)
+    assert 0.09 < accumulator.distance_2d < 0.13
+
+
 def test_optimized_path_length_can_be_xy_or_3d():
     poses = [stamped_pose(0, 0, 0), stamped_pose(3, 4, 0), stamped_pose(3, 4, 12)]
     assert MODULE.path_length(poses, dimensions=2) == 5.0

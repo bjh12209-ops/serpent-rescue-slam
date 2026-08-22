@@ -1,6 +1,6 @@
 ekf_filter_node:
   ros__parameters:
-    frequency: 60.0
+    frequency: 45.0
     sensor_timeout: 0.2
     two_d_mode: false
     publish_tf: true
@@ -26,10 +26,13 @@ ekf_filter_node:
     odom0_queue_size: 10
     odom0_nodelay: false
 
-    # WT901C485 0x52. Fuse gravity-referenced roll/pitch and angular rates.
+    # Head WT901C485 0x50. Fuse gravity-referenced roll/pitch and angular rates.
     # Yaw orientation is intentionally excluded because this 6-axis mode has
     # arbitrary startup yaw and no absolute heading reference.
-    imu0: /imu_52/data
+    # Only the head IMU is fused with the head-mounted camera odometry. The
+    # middle/tail IMUs belong to moving segments and must not be treated as
+    # measurements of this same rigid body.
+    imu0: /imu_50/data
     imu0_config: [false, false, false,
                   true,  true,  false,
                   false, false, false,

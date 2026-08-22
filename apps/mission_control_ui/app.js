@@ -5,6 +5,29 @@ const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 const lerp = (a, b, amount) => a + (b - a) * amount;
 const formatSigned = (value) => `${value >= 0 ? "+" : ""}${value.toFixed(2)}`;
 
+const quaternionFromEuler = (roll, pitch, yaw) => {
+  const cr = Math.cos(roll / 2); const sr = Math.sin(roll / 2);
+  const cp = Math.cos(pitch / 2); const sp = Math.sin(pitch / 2);
+  const cy = Math.cos(yaw / 2); const sy = Math.sin(yaw / 2);
+  return {
+    x: sr * cp * cy - cr * sp * sy,
+    y: cr * sp * cy + sr * cp * sy,
+    z: cr * cp * sy - sr * sp * cy,
+    w: cr * cp * cy + sr * sp * sy,
+  };
+};
+
+const mockImu = (sensorId, role, moduleIndex) => ({
+  sensorId,
+  displayId: `0x${sensorId}`,
+  role,
+  moduleIndex,
+  online: true,
+  ageSec: 0,
+  quaternion: { x: 0, y: 0, z: 0, w: 1 },
+  eulerDeg: { roll: 0, pitch: 0, yaw: 0 },
+});
+
 class MissionStore extends EventTarget {
   constructor() {
     super();
@@ -19,6 +42,7 @@ class MissionStore extends EventTarget {
       occupiedCells: new Set(),
       mapCellSize: 0.42,
       cloudPoints: [],
+      cloudPointCount: 0,
       segmentPoses: [],
       cameraFrame: null,
       distanceTraveled: 0,
@@ -26,16 +50,40 @@ class MissionStore extends EventTarget {
       distanceSlamCorrected: 0,
       distanceFromStart: 0,
       mapNodes: 1,
-      mapRate: 3,
+      mapRate: 2,
       battery: 87,
       latency: 24,
       rates: {
         RGB: { value: 30, expected: 30, ok: true },
         DEPTH: { value: 30, expected: 30, ok: true },
         VO: { value: 29.6, expected: 30, ok: true },
-        SLAM: { value: 3, expected: 3, ok: true },
-        IMU: { value: 60, expected: 60, ok: true },
-        EKF: { value: 60, expected: 60, ok: true },
+        SLAM: { value: 2, expected: 2, ok: true },
+        IMU50: { value: 45, expected: 45, ok: true },
+        IMU51: { value: 45, expected: 45, ok: true },
+        IMU52: { value: 45, expected: 45, ok: true },
+        EKF: { value: 45, expected: 45, ok: true },
+      },
+      imus: {
+        50: mockImu("50", "HEAD", 1),
+        51: mockImu("51", "MIDDLE", 2),
+        52: mockImu("52", "TAIL", 3),
+      },
+      snakeModel: {
+        moduleCount: 7,
+        modules: [
+          { moduleIndex: 1, active: true, sensorId: "50" },
+          { moduleIndex: 2, active: true, sensorId: "51" },
+          { moduleIndex: 3, active: true, sensorId: "52" },
+          { moduleIndex: 4, active: false, sensorId: null },
+          { moduleIndex: 5, active: false, sensorId: null },
+          { moduleIndex: 6, active: false, sensorId: null },
+          { moduleIndex: 7, active: false, sensorId: null },
+        ],
+        activeModules: [
+          { sensorId: "50", displayId: "0x50", role: "HEAD", moduleIndex: 1, translationKnown: true, translation: { x: -0.05, y: 0, z: 0.02 }, visualLength: 0.28 },
+          { sensorId: "51", displayId: "0x51", role: "MIDDLE", moduleIndex: 2, translationKnown: false, translation: null, visualLength: 0.28 },
+          { sensorId: "52", displayId: "0x52", role: "TAIL", moduleIndex: 3, translationKnown: false, translation: null, visualLength: 0.28 },
+        ],
       },
       personDetection: {
         detected: false,
@@ -140,10 +188,30 @@ class MockTelemetrySource {
       RGB: { value: jitter(29.9, 0.35), expected: 30, ok: true },
       DEPTH: { value: jitter(29.8, 0.45), expected: 30, ok: true },
       VO: { value: jitter(29.4, 0.75), expected: 30, ok: true },
-      SLAM: { value: jitter(3.0, 0.08), expected: 3, ok: true },
-      IMU: { value: jitter(59.8, 0.55), expected: 60, ok: true },
-      EKF: { value: jitter(60.0, 0.4), expected: 60, ok: true },
+      SLAM: { value: jitter(2.0, 0.08), expected: 2, ok: true },
+      IMU50: { value: jitter(44.2, 0.55), expected: 45, ok: true },
+      IMU51: { value: jitter(44.1, 0.65), expected: 45, ok: true },
+      IMU52: { value: jitter(44.2, 0.6), expected: 45, ok: true },
+      EKF: { value: jitter(45.0, 0.4), expected: 45, ok: true },
     };
+    const imuAngles = [
+      [Math.sin(this.elapsed * 1.1) * 8, Math.sin(this.elapsed * 0.7) * 5, yaw * 180 / Math.PI],
+      [Math.sin(this.elapsed * 1.1 + 0.8) * 13, Math.sin(this.elapsed * 0.8 + 0.4) * 8, yaw * 180 / Math.PI + Math.sin(this.elapsed) * 18],
+      [Math.sin(this.elapsed * 1.1 + 1.6) * 18, Math.sin(this.elapsed * 0.8 + 0.9) * 10, yaw * 180 / Math.PI + Math.sin(this.elapsed + 0.7) * 28],
+    ];
+    const imus = { ...this.store.state.imus };
+    ["50", "51", "52"].forEach((sensorId, index) => {
+      const [roll, pitch, imuYaw] = imuAngles[index];
+      imus[sensorId] = {
+        ...imus[sensorId],
+        eulerDeg: { roll, pitch, yaw: imuYaw },
+        quaternion: quaternionFromEuler(
+          roll * Math.PI / 180,
+          pitch * Math.PI / 180,
+          imuYaw * Math.PI / 180,
+        ),
+      };
+    });
 
     let target = this.store.state.target;
     if (!target && this.elapsed > 46) {
@@ -156,6 +224,7 @@ class MockTelemetrySource {
       pose,
       distanceFromStart,
       rates,
+      imus,
       mapRate: rates.SLAM.value,
       battery: clamp(87 - this.elapsed / 1100, 15, 100),
       latency: Math.round(jitter(24, 4)),
@@ -183,6 +252,7 @@ class WebSocketTelemetrySource {
     this.store = store;
     this.url = url;
     this.retryDelay = 1000;
+    this.sparseCloudStreak = 0;
   }
 
   start() {
@@ -191,6 +261,7 @@ class WebSocketTelemetrySource {
 
   connect() {
     this.socket = new WebSocket(this.url);
+    this.socket.binaryType = "arraybuffer";
     this.store.update({ source: "websocket", connected: false });
     this.socket.addEventListener("open", () => {
       this.retryDelay = 1000;
@@ -203,6 +274,10 @@ class WebSocketTelemetrySource {
       }, 2000);
     });
     this.socket.addEventListener("message", (event) => {
+      if (event.data instanceof ArrayBuffer) {
+        this.applyBinaryMessage(event.data);
+        return;
+      }
       try {
         this.applyMessage(JSON.parse(event.data));
       } catch (error) {
@@ -217,6 +292,43 @@ class WebSocketTelemetrySource {
     });
   }
 
+  applyBinaryMessage(buffer) {
+    if (buffer.byteLength < 8) return;
+    const bytes = new Uint8Array(buffer, 0, 4);
+    if (String.fromCharCode(...bytes) !== "SPC1") return;
+    const view = new DataView(buffer);
+    const declaredCount = view.getUint32(4, true);
+    const count = Math.min(declaredCount, Math.floor((buffer.byteLength - 8) / 16));
+    if (count <= 0) return;
+    const previousCount = this.store.state.cloudPoints?.count
+      ?? this.store.state.cloudPointCount
+      ?? 0;
+    const suspiciouslySparse = previousCount >= 500 && count < previousCount * 0.12;
+    if (suspiciouslySparse) {
+      this.sparseCloudStreak += 1;
+      // Only an explicit cloud_reset, derived from the complete /mapGraph,
+      // may clear a useful map. Sparse RTAB rebuild products are never drawn.
+      return;
+    }
+    this.sparseCloudStreak = 0;
+    const positions = new Float32Array(count * 3);
+    const colors = new Float32Array(count * 3);
+    for (let index = 0; index < count; index += 1) {
+      const source = 8 + index * 16;
+      const target = index * 3;
+      positions[target] = view.getFloat32(source, true);
+      positions[target + 1] = view.getFloat32(source + 4, true);
+      positions[target + 2] = view.getFloat32(source + 8, true);
+      colors[target] = view.getUint8(source + 12) / 255;
+      colors[target + 1] = view.getUint8(source + 13) / 255;
+      colors[target + 2] = view.getUint8(source + 14) / 255;
+    }
+    this.store.update({
+      cloudPoints: { positions, colors, count },
+      cloudPointCount: count,
+    });
+  }
+
   applyMessage(message) {
     if (message.type === "snapshot") {
       const map = message.map ?? {};
@@ -228,7 +340,12 @@ class WebSocketTelemetrySource {
         exploredCells,
         occupiedCells,
         mapCellSize: map.cellSize ?? this.store.state.mapCellSize,
-        cloudPoints: message.cloudPoints ?? [],
+        // The current gateway sends the cloud immediately after this JSON as
+        // an SPC1 binary frame. Preserve the last good cloud across reconnects
+        // instead of replacing it with the empty compatibility field.
+        cloudPoints: (message.cloudPoints?.length ?? 0) > 0
+          ? message.cloudPoints
+          : this.store.state.cloudPoints,
       });
     } else if (message.type === "pose") {
       this.store.update({
@@ -255,7 +372,12 @@ class WebSocketTelemetrySource {
         mapNodes: message.mapNodes ?? this.store.state.mapNodes,
       });
     } else if (message.type === "cloud") {
-      this.store.update({ cloudPoints: message.points ?? [] });
+      // Backward compatibility with older gateways. New gateways use SPC1.
+      const points = message.points ?? [];
+      if (points.length > 0) this.store.update({ cloudPoints: points, cloudPointCount: points.length });
+    } else if (message.type === "cloud_reset") {
+      this.sparseCloudStreak = 0;
+      this.store.update({ cloudPoints: [], cloudPointCount: 0, target: null });
     } else if (message.type === "rates") {
       this.store.update({
         rates: { ...this.store.state.rates, ...message.rates },
@@ -270,6 +392,11 @@ class WebSocketTelemetrySource {
       }
     } else if (message.type === "segment_poses") {
       this.store.update({ segmentPoses: message.poses ?? [] });
+    } else if (message.type === "imu") {
+      const imu = message.imu ?? {};
+      if (imu.sensorId) {
+        this.store.update({ imus: { ...this.store.state.imus, [imu.sensorId]: imu } });
+      }
     } else if (message.type === "person_detection") {
       const detection = message.data ?? {};
       const wasDetected = Boolean(this.store.state.personDetection?.detected);
@@ -277,11 +404,28 @@ class WebSocketTelemetrySource {
         const candidate = detection.candidates?.[0];
         const extremities = candidate?.extremities?.map((item) => item.name) ?? [];
         const detail = extremities.length > 0 ? ` (${extremities.join(", ")})` : "";
-        this.store.addEvent(`사람 말단부 후보를 감지했습니다${detail}.`, "warning");
+        this.store.addEvent(`사람 후보를 감지했습니다${detail}.`, "warning");
       }
-      this.store.update({ personDetection: detection });
+      const candidate = detection.detected ? detection.candidates?.[0] : null;
+      const mapPosition = candidate?.mapPosition;
+      const localizedTarget = [mapPosition?.x, mapPosition?.y, mapPosition?.z]
+        .every(Number.isFinite)
+        ? {
+          id: candidate.id ?? "P-01",
+          x: mapPosition.x,
+          y: mapPosition.y,
+          z: mapPosition.z,
+          confidence: candidate.confidence ?? 0,
+          distanceMeters: candidate.distanceMeters,
+          localizedAt: detection.stamp,
+        }
+        : this.store.state.target;
+      this.store.update({ personDetection: detection, target: localizedTarget });
     } else if (message.type === "status") {
-      this.store.update({ missionSeconds: message.missionSeconds });
+      this.store.update({
+        missionSeconds: message.missionSeconds,
+        imus: message.imus ?? this.store.state.imus,
+      });
     } else if (message.type === "pong" && Number.isFinite(message.sent)) {
       this.store.update({ latency: Math.round(performance.now() - message.sent) });
     }
@@ -379,10 +523,12 @@ class MapRenderer {
   resize() {
     const ratio = window.devicePixelRatio || 1;
     const bounds = this.canvas.parentElement.getBoundingClientRect();
-    this.canvas.width = Math.round(bounds.width * ratio);
-    this.canvas.height = Math.round(bounds.height * ratio);
-    this.canvas.style.width = `${bounds.width}px`;
-    this.canvas.style.height = `${bounds.height}px`;
+    const width = Math.max(1, Math.round(bounds.width * ratio));
+    const height = Math.max(1, Math.round(bounds.height * ratio));
+    if (this.canvas.width !== width || this.canvas.height !== height) {
+      this.canvas.width = width;
+      this.canvas.height = height;
+    }
     this.context.setTransform(ratio, 0, 0, ratio, 0, 0);
     this.width = bounds.width;
     this.height = bounds.height;
@@ -532,10 +678,26 @@ class MapRenderer {
     if (this.store.state.occupiedCells.size > 0) return;
     ctx.fillStyle = "rgba(142, 187, 173, 0.66)";
     const pointSize = clamp(this.scale * 0.035, 1, 3);
-    this.store.state.cloudPoints.forEach(([x, y]) => {
-      const screen = this.worldToScreen(x, y);
-      ctx.fillRect(screen.x, screen.y, pointSize, pointSize);
-    });
+    const cloud = this.store.state.cloudPoints;
+    if (cloud?.positions instanceof Float32Array) {
+      // SPC1 packets are stored as flat typed arrays. Sample only enough
+      // points for a readable top-down fallback without blocking the UI.
+      const stride = Math.max(3, Math.ceil(cloud.positions.length / 24000) * 3);
+      for (let index = 0; index < cloud.positions.length; index += stride) {
+        const x = cloud.positions[index];
+        const y = cloud.positions[index + 1];
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        const screen = this.worldToScreen(x, y);
+        ctx.fillRect(screen.x, screen.y, pointSize, pointSize);
+      }
+      return;
+    }
+    if (Array.isArray(cloud)) {
+      cloud.forEach(([x, y]) => {
+        const screen = this.worldToScreen(x, y);
+        ctx.fillRect(screen.x, screen.y, pointSize, pointSize);
+      });
+    }
   }
 
   draw3d(ctx, timestamp) {
@@ -685,7 +847,19 @@ class MapRenderer {
     ctx.strokeRect(screen.x - size / 2, screen.y - size / 2, size, size);
     ctx.fillStyle = "#ffd166";
     ctx.font = "8px ui-monospace, monospace";
-    ctx.fillText(target.id, screen.x + 8, screen.y - 8);
+    const mapDistance = Math.hypot(
+      target.x - this.store.state.pose.x,
+      target.y - this.store.state.pose.y,
+      (target.z ?? 0) - (this.store.state.pose.z ?? 0),
+    );
+    const distance = Number.isFinite(target.distanceMeters)
+      ? target.distanceMeters
+      : mapDistance;
+    ctx.fillText(
+      `${target.id}  ${distance.toFixed(2)} m`,
+      screen.x + 8,
+      screen.y - 8,
+    );
   }
 }
 
@@ -745,12 +919,21 @@ class CloudRenderer {
   constructor(canvas, store) {
     this.canvas = canvas;
     this.store = store;
-    this.gl = canvas.getContext("webgl", { antialias: true, alpha: false });
+    this.gl = canvas.getContext("webgl", {
+      antialias: true,
+      alpha: false,
+      depth: true,
+      powerPreference: "high-performance",
+      // Retain the last completed frame if the integrated GPU misses a frame
+      // while ROS, mapping and YOLO are sharing the mini PC.
+      preserveDrawingBuffer: true,
+    });
     this.enabled = false;
     this.follow = true;
     this.yaw = -Math.PI / 4;
     this.pitch = 0.62;
     this.distance = 6;
+    this.pixelRatio = 1;
     this.target = { x: 0, y: 0, z: 0.35 };
     this.frames = [];
     this.drag = null;
@@ -759,6 +942,10 @@ class CloudRenderer {
     this.pathLength = -1;
     this.segmentReference = null;
     this.segmentLength = -1;
+    this.markerSignature = "";
+    this.pendingState = this.store.state;
+    this.dataDirty = true;
+    this.lastDataUpload = 0;
     this.hasAutoFit = false;
     this.bounds = null;
     if (!this.gl) {
@@ -770,6 +957,7 @@ class CloudRenderer {
     this.colorLocation = this.gl.getAttribLocation(this.program, "a_color");
     this.matrixLocation = this.gl.getUniformLocation(this.program, "u_viewProjection");
     this.pointSizeLocation = this.gl.getUniformLocation(this.program, "u_pointSize");
+    this.roundPointLocation = this.gl.getUniformLocation(this.program, "u_roundPoint");
     this.cloudBuffer = this.createGeometryBuffer();
     this.pathBuffer = this.createGeometryBuffer();
     this.markerBuffer = this.createGeometryBuffer();
@@ -778,9 +966,11 @@ class CloudRenderer {
     this.gridBuffer = this.createGridBuffer();
     this.bindEvents();
     new ResizeObserver(() => this.resize()).observe(canvas.parentElement);
-    this.store.addEventListener("update", (event) => this.updateData(event.detail));
+    this.store.addEventListener("update", (event) => {
+      this.pendingState = event.detail;
+      this.dataDirty = true;
+    });
     this.resize();
-    this.updateData(this.store.state);
     requestAnimationFrame((time) => this.draw(time));
   }
 
@@ -810,9 +1000,12 @@ class CloudRenderer {
     const fragment = this.compileShader(this.gl.FRAGMENT_SHADER, `
       precision mediump float;
       varying vec3 v_color;
+      uniform bool u_roundPoint;
       void main() {
-        vec2 delta = gl_PointCoord - vec2(0.5);
-        if (dot(delta, delta) > 0.25) discard;
+        if (u_roundPoint) {
+          vec2 delta = gl_PointCoord - vec2(0.5);
+          if (dot(delta, delta) > 0.25) discard;
+        }
         gl_FragColor = vec4(v_color, 0.92);
       }
     `);
@@ -868,26 +1061,42 @@ class CloudRenderer {
   updateData(state) {
     if (state.cloudPoints !== this.cloudReference) {
       this.cloudReference = state.cloudPoints;
-      const positions = [];
-      const colors = [];
+      let positions = [];
+      let colors = [];
       const minimum = [Infinity, Infinity, Infinity];
       const maximum = [-Infinity, -Infinity, -Infinity];
-      state.cloudPoints.forEach(([x, y, z, red, green, blue]) => {
-        if (![x, y, z].every(Number.isFinite)) return;
-        positions.push(x, y, z);
-        if ([red, green, blue].every(Number.isFinite)) {
-          colors.push(red / 255, green / 255, blue / 255);
-        } else {
-          const tone = clamp((z + 1.5) / 4.5, 0, 1);
-          colors.push(0.24 + tone * 0.35, 0.55 + tone * 0.28, 0.68);
+      if (state.cloudPoints?.positions instanceof Float32Array) {
+        positions = state.cloudPoints.positions;
+        colors = state.cloudPoints.colors;
+        for (let index = 0; index < positions.length; index += 3) {
+          const x = positions[index];
+          const y = positions[index + 1];
+          const z = positions[index + 2];
+          minimum[0] = Math.min(minimum[0], x);
+          minimum[1] = Math.min(minimum[1], y);
+          minimum[2] = Math.min(minimum[2], z);
+          maximum[0] = Math.max(maximum[0], x);
+          maximum[1] = Math.max(maximum[1], y);
+          maximum[2] = Math.max(maximum[2], z);
         }
-        minimum[0] = Math.min(minimum[0], x);
-        minimum[1] = Math.min(minimum[1], y);
-        minimum[2] = Math.min(minimum[2], z);
-        maximum[0] = Math.max(maximum[0], x);
-        maximum[1] = Math.max(maximum[1], y);
-        maximum[2] = Math.max(maximum[2], z);
-      });
+      } else {
+        state.cloudPoints.forEach(([x, y, z, red, green, blue]) => {
+          if (![x, y, z].every(Number.isFinite)) return;
+          positions.push(x, y, z);
+          if ([red, green, blue].every(Number.isFinite)) {
+            colors.push(red / 255, green / 255, blue / 255);
+          } else {
+            const tone = clamp((z + 1.5) / 4.5, 0, 1);
+            colors.push(0.24 + tone * 0.35, 0.55 + tone * 0.28, 0.68);
+          }
+          minimum[0] = Math.min(minimum[0], x);
+          minimum[1] = Math.min(minimum[1], y);
+          minimum[2] = Math.min(minimum[2], z);
+          maximum[0] = Math.max(maximum[0], x);
+          maximum[1] = Math.max(maximum[1], y);
+          maximum[2] = Math.max(maximum[2], z);
+        });
+      }
       this.uploadGeometry(this.cloudBuffer, positions, colors);
       if (positions.length > 0) {
         this.bounds = { minimum, maximum };
@@ -925,27 +1134,35 @@ class CloudRenderer {
       this.uploadGeometry(this.segmentBuffer, positions, colors);
     }
 
-    const markerPositions = [
-      state.start.x, state.start.y, state.start.z + 0.08,
-      state.pose.x, state.pose.y, state.pose.z + 0.12,
-    ];
-    const markerColors = [0.33, 0.96, 0.66, 1.0, 0.55, 0.26];
-    if (state.target) {
-      markerPositions.push(state.target.x, state.target.y, state.target.z ?? 0.2);
-      markerColors.push(1.0, 0.82, 0.4);
-    }
-    this.uploadGeometry(this.markerBuffer, markerPositions, markerColors);
-    const headingLength = 0.35;
-    this.uploadGeometry(
-      this.headingBuffer,
-      [
+    const markerSignature = [
+      state.start.x, state.start.y, state.start.z,
+      state.pose.x, state.pose.y, state.pose.z, state.pose.yaw,
+      state.target?.x, state.target?.y, state.target?.z,
+    ].join("|");
+    if (markerSignature !== this.markerSignature) {
+      this.markerSignature = markerSignature;
+      const markerPositions = [
+        state.start.x, state.start.y, state.start.z + 0.08,
         state.pose.x, state.pose.y, state.pose.z + 0.12,
-        state.pose.x + Math.cos(state.pose.yaw) * headingLength,
-        state.pose.y + Math.sin(state.pose.yaw) * headingLength,
-        state.pose.z + 0.12,
-      ],
-      [1.0, 0.55, 0.26, 1.0, 0.55, 0.26],
-    );
+      ];
+      const markerColors = [0.33, 0.96, 0.66, 1.0, 0.55, 0.26];
+      if (state.target) {
+        markerPositions.push(state.target.x, state.target.y, state.target.z ?? 0.2);
+        markerColors.push(1.0, 0.82, 0.4);
+      }
+      this.uploadGeometry(this.markerBuffer, markerPositions, markerColors);
+      const headingLength = 0.35;
+      this.uploadGeometry(
+        this.headingBuffer,
+        [
+          state.pose.x, state.pose.y, state.pose.z + 0.12,
+          state.pose.x + Math.cos(state.pose.yaw) * headingLength,
+          state.pose.y + Math.sin(state.pose.yaw) * headingLength,
+          state.pose.z + 0.12,
+        ],
+        [1.0, 0.55, 0.26, 1.0, 0.55, 0.26],
+      );
+    }
   }
 
   bindEvents() {
@@ -965,15 +1182,26 @@ class CloudRenderer {
       this.drag.y = event.clientY;
       if (this.drag.mode === "orbit") {
         this.yaw -= dx * 0.008;
-        this.pitch = clamp(this.pitch + dy * 0.008, 0.05, Math.PI / 2 - 0.02);
+        this.pitch = clamp(
+          this.pitch + dy * 0.008,
+          -Math.PI / 2 + 0.02,
+          Math.PI / 2 - 0.02,
+        );
       } else {
         this.follow = false;
         updateFollowButton(false);
-        const amount = this.distance * 0.0018;
-        const right = [-Math.sin(this.yaw), Math.cos(this.yaw)];
-        const forward = [-Math.cos(this.yaw), -Math.sin(this.yaw)];
-        this.target.x += (-dx * right[0] + dy * forward[0]) * amount;
-        this.target.y += (-dx * right[1] + dy * forward[1]) * amount;
+        const amount = this.distance * 0.0015;
+        const eye = this.eyePosition();
+        const target = [this.target.x, this.target.y, this.target.z];
+        const forward = vectorNormalize(vectorSubtract(target, eye));
+        let right = vectorNormalize(vectorCross(forward, [0, 0, 1]));
+        if (Math.abs(vectorDot(forward, [0, 0, 1])) > 0.995) {
+          right = [Math.cos(this.yaw + Math.PI / 2), Math.sin(this.yaw + Math.PI / 2), 0];
+        }
+        const cameraUp = vectorNormalize(vectorCross(right, forward));
+        this.target.x += (-dx * right[0] + dy * cameraUp[0]) * amount;
+        this.target.y += (-dx * right[1] + dy * cameraUp[1]) * amount;
+        this.target.z += (-dx * right[2] + dy * cameraUp[2]) * amount;
       }
     });
     const finishDrag = () => {
@@ -982,6 +1210,7 @@ class CloudRenderer {
     };
     this.canvas.addEventListener("pointerup", finishDrag);
     this.canvas.addEventListener("pointercancel", finishDrag);
+    this.canvas.addEventListener("lostpointercapture", finishDrag);
     this.canvas.addEventListener("wheel", (event) => {
       event.preventDefault();
       this.distance = clamp(this.distance * Math.exp(event.deltaY * 0.001), 0.3, 100);
@@ -990,12 +1219,14 @@ class CloudRenderer {
   }
 
   resize() {
-    const ratio = Math.min(window.devicePixelRatio || 1, 2);
+    const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
+    this.pixelRatio = ratio;
     const bounds = this.canvas.parentElement.getBoundingClientRect();
-    this.canvas.width = Math.max(1, Math.round(bounds.width * ratio));
-    this.canvas.height = Math.max(1, Math.round(bounds.height * ratio));
-    this.canvas.style.width = `${bounds.width}px`;
-    this.canvas.style.height = `${bounds.height}px`;
+    const width = Math.max(1, Math.round(bounds.width * ratio));
+    const height = Math.max(1, Math.round(bounds.height * ratio));
+    if (this.canvas.width === width && this.canvas.height === height) return;
+    this.canvas.width = width;
+    this.canvas.height = height;
     this.gl?.viewport(0, 0, this.canvas.width, this.canvas.height);
   }
 
@@ -1004,6 +1235,15 @@ class CloudRenderer {
     this.target = { x: pose.x, y: pose.y, z: pose.z + 0.25 };
     this.follow = true;
     updateFollowButton(true);
+  }
+
+  eyePosition() {
+    const cosPitch = Math.cos(this.pitch);
+    return [
+      this.target.x + this.distance * cosPitch * Math.cos(this.yaw),
+      this.target.y + this.distance * cosPitch * Math.sin(this.yaw),
+      this.target.z + this.distance * Math.sin(this.pitch),
+    ];
   }
 
   fitToCloud() {
@@ -1040,6 +1280,10 @@ class CloudRenderer {
       this.pitch = 0.08;
     } else if (name === "fit") {
       this.fitToCloud();
+    } else if (name === "reset") {
+      this.yaw = -Math.PI / 4;
+      this.pitch = 0.62;
+      this.fitToCloud();
     }
   }
 
@@ -1056,11 +1300,58 @@ class CloudRenderer {
     if (!buffer.count) return;
     this.bindGeometry(buffer);
     this.gl.uniform1f(this.pointSizeLocation, pointSize);
+    this.gl.uniform1i(this.roundPointLocation, mode === this.gl.POINTS ? 1 : 0);
     this.gl.drawArrays(mode, 0, buffer.count);
+  }
+
+  updateTargetLabel(viewProjection) {
+    const label = $("#targetMapLabel");
+    const target = this.store.state.target;
+    if (!target) {
+      label.classList.add("hidden");
+      return;
+    }
+    const x = target.x;
+    const y = target.y;
+    const z = target.z ?? 0.2;
+    const clipX = viewProjection[0] * x + viewProjection[4] * y
+      + viewProjection[8] * z + viewProjection[12];
+    const clipY = viewProjection[1] * x + viewProjection[5] * y
+      + viewProjection[9] * z + viewProjection[13];
+    const clipW = viewProjection[3] * x + viewProjection[7] * y
+      + viewProjection[11] * z + viewProjection[15];
+    if (clipW <= 0) {
+      label.classList.add("hidden");
+      return;
+    }
+    const normalizedX = clipX / clipW;
+    const normalizedY = clipY / clipW;
+    if (Math.abs(normalizedX) > 1.05 || Math.abs(normalizedY) > 1.05) {
+      label.classList.add("hidden");
+      return;
+    }
+    const bounds = this.canvas.getBoundingClientRect();
+    label.style.left = `${(normalizedX * 0.5 + 0.5) * bounds.width}px`;
+    label.style.top = `${(0.5 - normalizedY * 0.5) * bounds.height}px`;
+    const mapDistance = Math.hypot(
+      target.x - this.store.state.pose.x,
+      target.y - this.store.state.pose.y,
+      (target.z ?? 0) - (this.store.state.pose.z ?? 0),
+    );
+    const distance = Number.isFinite(target.distanceMeters)
+      ? target.distanceMeters
+      : mapDistance;
+    label.textContent = `${target.id}  ${distance.toFixed(2)} m`;
+    label.classList.remove("hidden");
   }
 
   draw(timestamp) {
     if (this.enabled && !this.failed) {
+      if (this.dataDirty && timestamp - this.lastDataUpload >= 33) {
+        this.updateData(this.pendingState);
+        this.dataDirty = false;
+        this.lastDataUpload = timestamp;
+      }
       if (this.follow) {
         const pose = this.store.state.pose;
         this.target.x = pose.x;
@@ -1073,18 +1364,18 @@ class CloudRenderer {
       }
       $("#renderRate").textContent = `${Math.max(0, this.frames.length - 1)} FPS`;
 
-      const cosPitch = Math.cos(this.pitch);
-      const eye = [
-        this.target.x + this.distance * cosPitch * Math.cos(this.yaw),
-        this.target.y + this.distance * cosPitch * Math.sin(this.yaw),
-        this.target.z + this.distance * Math.sin(this.pitch),
-      ];
+      const eye = this.eyePosition();
       const target = [this.target.x, this.target.y, this.target.z];
+      const span = this.bounds
+        ? Math.max(...this.bounds.maximum.map((value, index) => value - this.bounds.minimum[index]))
+        : 10;
+      const near = Math.max(0.005, this.distance / 1500);
+      const far = Math.max(250, this.distance + span * 8);
       const projection = perspectiveMatrix(
         Math.PI / 3,
         this.canvas.width / Math.max(this.canvas.height, 1),
-        0.02,
-        250,
+        near,
+        far,
       );
       const viewProjection = matrixMultiply(
         projection,
@@ -1099,15 +1390,353 @@ class CloudRenderer {
       this.gl.useProgram(this.program);
       this.gl.uniformMatrix4fv(this.matrixLocation, false, viewProjection);
       this.renderGeometry(this.gridBuffer, this.gl.LINES, 1);
-      this.renderGeometry(this.cloudBuffer, this.gl.POINTS, 5.2);
+      this.renderGeometry(this.cloudBuffer, this.gl.POINTS, 4.2 * this.pixelRatio);
       this.renderGeometry(this.pathBuffer, this.gl.LINE_STRIP, 2);
       this.renderGeometry(this.segmentBuffer, this.gl.LINE_STRIP, 4);
       this.renderGeometry(this.headingBuffer, this.gl.LINES, 3);
-      this.renderGeometry(this.markerBuffer, this.gl.POINTS, 17);
+      this.renderGeometry(this.markerBuffer, this.gl.POINTS, 13 * this.pixelRatio);
+      this.updateTargetLabel(viewProjection);
 
       const yawDegrees = ((-this.yaw * 180 / Math.PI) + 360) % 360;
       const pitchDegrees = this.pitch * 180 / Math.PI;
       $("#cursorCoordinates").textContent = `ORBIT ${yawDegrees.toFixed(0)}° / ${pitchDegrees.toFixed(0)}°`;
+    }
+    requestAnimationFrame((time) => this.draw(time));
+  }
+}
+
+const normalizeQuaternion = (quaternion = {}) => {
+  const value = {
+    x: Number(quaternion.x) || 0,
+    y: Number(quaternion.y) || 0,
+    z: Number(quaternion.z) || 0,
+    w: Number.isFinite(Number(quaternion.w)) ? Number(quaternion.w) : 1,
+  };
+  const length = Math.hypot(value.x, value.y, value.z, value.w) || 1;
+  return {
+    x: value.x / length, y: value.y / length,
+    z: value.z / length, w: value.w / length,
+  };
+};
+
+const rotateVectorByQuaternion = (vector, inputQuaternion) => {
+  const quaternion = normalizeQuaternion(inputQuaternion);
+  const q = [quaternion.x, quaternion.y, quaternion.z];
+  const uv = vectorCross(q, vector);
+  const uuv = vectorCross(q, uv);
+  return vector.map((component, index) => (
+    component + 2 * (quaternion.w * uv[index] + uuv[index])
+  ));
+};
+
+class SnakePoseRenderer {
+  constructor(canvas, store) {
+    this.canvas = canvas;
+    this.store = store;
+    this.gl = canvas.getContext("webgl", {
+      antialias: true,
+      alpha: false,
+      depth: true,
+      powerPreference: "high-performance",
+      preserveDrawingBuffer: false,
+    });
+    this.enabled = false;
+    this.follow = false;
+    this.yaw = -0.8;
+    this.pitch = 0.5;
+    this.distance = 1.55;
+    this.target = { x: -0.28, y: 0, z: 0.02 };
+    this.pixelRatio = 1;
+    this.drag = null;
+    this.frames = [];
+    this.pendingState = this.store.state;
+    this.dataDirty = true;
+    this.lastDataUpload = 0;
+    if (!this.gl) {
+      this.failed = true;
+      return;
+    }
+    this.program = this.createProgram();
+    this.positionLocation = this.gl.getAttribLocation(this.program, "a_position");
+    this.colorLocation = this.gl.getAttribLocation(this.program, "a_color");
+    this.matrixLocation = this.gl.getUniformLocation(this.program, "u_viewProjection");
+    this.pointSizeLocation = this.gl.getUniformLocation(this.program, "u_pointSize");
+    this.gridBuffer = this.createGridBuffer();
+    this.modelBuffer = this.createGeometryBuffer();
+    this.axisBuffer = this.createGeometryBuffer();
+    this.jointBuffer = this.createGeometryBuffer();
+    this.bindEvents();
+    new ResizeObserver(() => this.resize()).observe(canvas.parentElement);
+    this.store.addEventListener("update", (event) => {
+      this.pendingState = event.detail;
+      this.dataDirty = true;
+    });
+    this.resize();
+    requestAnimationFrame((time) => this.draw(time));
+  }
+
+  compileShader(type, source) {
+    const shader = this.gl.createShader(type);
+    this.gl.shaderSource(shader, source);
+    this.gl.compileShader(shader);
+    if (!this.gl.getShaderParameter(shader, this.gl.COMPILE_STATUS)) {
+      throw new Error(this.gl.getShaderInfoLog(shader));
+    }
+    return shader;
+  }
+
+  createProgram() {
+    const vertex = this.compileShader(this.gl.VERTEX_SHADER, `
+      attribute vec3 a_position;
+      attribute vec3 a_color;
+      uniform mat4 u_viewProjection;
+      uniform float u_pointSize;
+      varying vec3 v_color;
+      void main() {
+        gl_Position = u_viewProjection * vec4(a_position, 1.0);
+        gl_PointSize = u_pointSize;
+        v_color = a_color;
+      }
+    `);
+    const fragment = this.compileShader(this.gl.FRAGMENT_SHADER, `
+      precision highp float;
+      varying vec3 v_color;
+      void main() { gl_FragColor = vec4(v_color, 0.96); }
+    `);
+    const program = this.gl.createProgram();
+    this.gl.attachShader(program, vertex);
+    this.gl.attachShader(program, fragment);
+    this.gl.linkProgram(program);
+    if (!this.gl.getProgramParameter(program, this.gl.LINK_STATUS)) {
+      throw new Error(this.gl.getProgramInfoLog(program));
+    }
+    return program;
+  }
+
+  createGeometryBuffer() {
+    return {
+      positions: this.gl.createBuffer(),
+      colors: this.gl.createBuffer(),
+      count: 0,
+    };
+  }
+
+  uploadGeometry(buffer, positions, colors) {
+    buffer.count = positions.length / 3;
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, buffer.positions);
+    this.gl.bufferData(this.gl.ARRAY_BUFFER, new Float32Array(positions), this.gl.DYNAMIC_DRAW);
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, buffer.colors);
+    this.gl.bufferData(this.gl.ARRAY_BUFFER, new Float32Array(colors), this.gl.DYNAMIC_DRAW);
+  }
+
+  createGridBuffer() {
+    const positions = [];
+    const colors = [];
+    for (let index = -10; index <= 10; index += 1) {
+      const value = index * 0.1;
+      positions.push(value, -1, -0.08, value, 1, -0.08);
+      positions.push(-1, value, -0.08, 1, value, -0.08);
+      const color = index % 5 === 0 ? [0.12, 0.3, 0.24] : [0.055, 0.14, 0.12];
+      colors.push(...color, ...color, ...color, ...color);
+    }
+    const buffer = this.createGeometryBuffer();
+    this.uploadGeometry(buffer, positions, colors);
+    return buffer;
+  }
+
+  updateData(state) {
+    const modules = [...(state.snakeModel?.activeModules ?? [])]
+      .sort((left, right) => left.moduleIndex - right.moduleIndex);
+    const modelPositions = [];
+    const modelColors = [];
+    const axisPositions = [];
+    const axisColors = [];
+    const jointPositions = [];
+    const jointColors = [];
+    let center = [0, 0, 0.02];
+    let previousCenter = [0, 0, 0];
+
+    modules.forEach((module, moduleOffset) => {
+      const imu = state.imus?.[module.sensorId] ?? {};
+      const quaternion = normalizeQuaternion(imu.quaternion);
+      const length = clamp(Number(module.visualLength) || 0.28, 0.08, 1);
+      if (moduleOffset === 0 && module.translationKnown && module.translation) {
+        center = [module.translation.x, module.translation.y, module.translation.z];
+      } else if (moduleOffset > 0) {
+        const previousModule = modules[moduleOffset - 1];
+        const previousImu = state.imus?.[previousModule.sensorId] ?? {};
+        const previousLength = clamp(Number(previousModule.visualLength) || 0.28, 0.08, 1);
+        center = previousCenter.map((value, index) => (
+          value + rotateVectorByQuaternion([-previousLength, 0, 0], previousImu.quaternion)[index]
+        ));
+      }
+
+      if (moduleOffset === 0) {
+        jointPositions.push(0, 0, 0, ...center);
+        jointColors.push(0.35, 0.72, 0.82, 0.35, 0.72, 0.82);
+      } else {
+        jointPositions.push(...previousCenter, ...center);
+        jointColors.push(0.95, 0.62, 0.25, 0.95, 0.62, 0.25);
+      }
+
+      const half = [length / 2, 0.055, 0.04];
+      const corners = [];
+      [-1, 1].forEach((sx) => [-1, 1].forEach((sy) => [-1, 1].forEach((sz) => {
+        const rotated = rotateVectorByQuaternion(
+          [sx * half[0], sy * half[1], sz * half[2]], quaternion,
+        );
+        corners.push(rotated.map((value, index) => value + center[index]));
+      })));
+      const edges = [
+        [0, 1], [0, 2], [0, 4], [1, 3], [1, 5], [2, 3],
+        [2, 6], [3, 7], [4, 5], [4, 6], [5, 7], [6, 7],
+      ];
+      const baseColor = imu.online
+        ? (moduleOffset === 0 ? [0.33, 0.96, 0.66] : [0.35, 0.72, 0.82])
+        : [0.65, 0.2, 0.23];
+      edges.forEach(([start, end]) => {
+        modelPositions.push(...corners[start], ...corners[end]);
+        modelColors.push(...baseColor, ...baseColor);
+      });
+
+      const axisLength = Math.min(0.14, length * 0.55);
+      [
+        [[axisLength, 0, 0], [1, 0.18, 0.2]],
+        [[0, axisLength, 0], [0.2, 1, 0.35]],
+        [[0, 0, axisLength], [0.2, 0.5, 1]],
+      ].forEach(([axis, color]) => {
+        const endpoint = rotateVectorByQuaternion(axis, quaternion)
+          .map((value, index) => value + center[index]);
+        axisPositions.push(...center, ...endpoint);
+        axisColors.push(...color, ...color);
+      });
+      previousCenter = [...center];
+    });
+
+    this.uploadGeometry(this.modelBuffer, modelPositions, modelColors);
+    this.uploadGeometry(this.axisBuffer, axisPositions, axisColors);
+    this.uploadGeometry(this.jointBuffer, jointPositions, jointColors);
+  }
+
+  bindEvents() {
+    this.canvas.addEventListener("contextmenu", (event) => event.preventDefault());
+    this.canvas.addEventListener("pointerdown", (event) => {
+      const pan = event.button === 1 || event.button === 2 || event.shiftKey
+        || event.ctrlKey || event.metaKey;
+      this.drag = { x: event.clientX, y: event.clientY, mode: pan ? "pan" : "orbit" };
+      this.canvas.setPointerCapture(event.pointerId);
+      this.canvas.classList.add("dragging");
+    });
+    this.canvas.addEventListener("pointermove", (event) => {
+      if (!this.drag) return;
+      const dx = event.clientX - this.drag.x;
+      const dy = event.clientY - this.drag.y;
+      this.drag.x = event.clientX;
+      this.drag.y = event.clientY;
+      if (this.drag.mode === "orbit") {
+        this.yaw -= dx * 0.008;
+        this.pitch = clamp(this.pitch + dy * 0.008, -Math.PI / 2 + 0.02, Math.PI / 2 - 0.02);
+      } else {
+        const eye = this.eyePosition();
+        const target = [this.target.x, this.target.y, this.target.z];
+        const forward = vectorNormalize(vectorSubtract(target, eye));
+        const right = vectorNormalize(vectorCross(forward, [0, 0, 1]));
+        const cameraUp = vectorNormalize(vectorCross(right, forward));
+        const amount = this.distance * 0.0015;
+        this.target.x += (-dx * right[0] + dy * cameraUp[0]) * amount;
+        this.target.y += (-dx * right[1] + dy * cameraUp[1]) * amount;
+        this.target.z += (-dx * right[2] + dy * cameraUp[2]) * amount;
+      }
+    });
+    const finish = () => { this.drag = null; this.canvas.classList.remove("dragging"); };
+    this.canvas.addEventListener("pointerup", finish);
+    this.canvas.addEventListener("pointercancel", finish);
+    this.canvas.addEventListener("lostpointercapture", finish);
+    this.canvas.addEventListener("wheel", (event) => {
+      event.preventDefault();
+      this.distance = clamp(this.distance * Math.exp(event.deltaY * 0.001), 0.25, 12);
+    }, { passive: false });
+    this.canvas.addEventListener("dblclick", () => this.setPreset("reset"));
+  }
+
+  resize() {
+    const bounds = this.canvas.parentElement.getBoundingClientRect();
+    this.pixelRatio = Math.min(window.devicePixelRatio || 1, 2.5);
+    const width = Math.max(1, Math.round(bounds.width * this.pixelRatio));
+    const height = Math.max(1, Math.round(bounds.height * this.pixelRatio));
+    if (this.canvas.width === width && this.canvas.height === height) return;
+    this.canvas.width = width;
+    this.canvas.height = height;
+    this.gl?.viewport(0, 0, this.canvas.width, this.canvas.height);
+  }
+
+  eyePosition() {
+    const cosPitch = Math.cos(this.pitch);
+    return [
+      this.target.x + this.distance * cosPitch * Math.cos(this.yaw),
+      this.target.y + this.distance * cosPitch * Math.sin(this.yaw),
+      this.target.z + this.distance * Math.sin(this.pitch),
+    ];
+  }
+
+  setPreset(name) {
+    if (name === "top") {
+      this.yaw = -Math.PI / 2; this.pitch = Math.PI / 2 - 0.02;
+    } else if (name === "front") {
+      this.yaw = -Math.PI / 2; this.pitch = 0.02;
+    } else if (name === "side") {
+      this.yaw = 0; this.pitch = 0.02;
+    } else if (name === "reset") {
+      this.yaw = -0.8; this.pitch = 0.5; this.distance = 1.55;
+      this.target = { x: -0.28, y: 0, z: 0.02 };
+    }
+  }
+
+  bindGeometry(buffer) {
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, buffer.positions);
+    this.gl.vertexAttribPointer(this.positionLocation, 3, this.gl.FLOAT, false, 0, 0);
+    this.gl.enableVertexAttribArray(this.positionLocation);
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, buffer.colors);
+    this.gl.vertexAttribPointer(this.colorLocation, 3, this.gl.FLOAT, false, 0, 0);
+    this.gl.enableVertexAttribArray(this.colorLocation);
+  }
+
+  renderGeometry(buffer, mode) {
+    if (!buffer.count) return;
+    this.bindGeometry(buffer);
+    this.gl.uniform1f(this.pointSizeLocation, this.pixelRatio);
+    this.gl.drawArrays(mode, 0, buffer.count);
+  }
+
+  draw(timestamp) {
+    if (this.enabled && !this.failed) {
+      if (this.dataDirty && timestamp - this.lastDataUpload >= 33) {
+        this.updateData(this.pendingState);
+        this.dataDirty = false;
+        this.lastDataUpload = timestamp;
+      }
+      this.frames.push(timestamp);
+      while (this.frames.length > 1 && timestamp - this.frames[0] > 1000) this.frames.shift();
+      $("#renderRate").textContent = `${Math.max(0, this.frames.length - 1)} FPS`;
+      const projection = perspectiveMatrix(
+        Math.PI / 3,
+        this.canvas.width / Math.max(this.canvas.height, 1),
+        0.005,
+        50,
+      );
+      const viewProjection = matrixMultiply(
+        projection,
+        lookAtMatrix(this.eyePosition(), [this.target.x, this.target.y, this.target.z], [0, 0, 1]),
+      );
+      this.gl.clearColor(0.026, 0.043, 0.05, 1);
+      this.gl.clear(this.gl.COLOR_BUFFER_BIT | this.gl.DEPTH_BUFFER_BIT);
+      this.gl.enable(this.gl.DEPTH_TEST);
+      this.gl.useProgram(this.program);
+      this.gl.uniformMatrix4fv(this.matrixLocation, false, viewProjection);
+      this.renderGeometry(this.gridBuffer, this.gl.LINES);
+      this.renderGeometry(this.jointBuffer, this.gl.LINES);
+      this.renderGeometry(this.modelBuffer, this.gl.LINES);
+      this.renderGeometry(this.axisBuffer, this.gl.LINES);
     }
     requestAnimationFrame((time) => this.draw(time));
   }
@@ -1124,6 +1753,7 @@ class CameraRenderer {
     this.streamUrl = null;
     this.streamRetryTimer = null;
     this.detections = [];
+    this.overlayDirty = true;
     this.streamImage.addEventListener("error", () => this.retryStream());
     new ResizeObserver(() => this.resize()).observe(canvas.parentElement);
     this.resize();
@@ -1161,19 +1791,29 @@ class CameraRenderer {
 
   setDetections(detection) {
     this.detections = detection?.detected ? (detection.candidates ?? []) : [];
+    this.overlayDirty = true;
   }
 
   resize() {
-    const ratio = window.devicePixelRatio || 1;
+    const ratio = Math.min(window.devicePixelRatio || 1, 2);
     const bounds = this.canvas.parentElement.getBoundingClientRect();
-    this.canvas.width = Math.round(bounds.width * ratio);
-    this.canvas.height = Math.round(bounds.height * ratio);
+    const width = Math.max(1, Math.round(bounds.width * ratio));
+    const height = Math.max(1, Math.round(bounds.height * ratio));
+    if (this.canvas.width !== width || this.canvas.height !== height) {
+      this.canvas.width = width;
+      this.canvas.height = height;
+    }
     this.context.setTransform(ratio, 0, 0, ratio, 0, 0);
     this.width = bounds.width;
     this.height = bounds.height;
+    this.overlayDirty = true;
   }
 
   draw(time) {
+    if (this.streaming && !this.overlayDirty) {
+      requestAnimationFrame((nextTime) => this.draw(nextTime));
+      return;
+    }
     const ctx = this.context;
     ctx.clearRect(0, 0, this.width, this.height);
     if (!this.streaming && this.liveImage) {
@@ -1207,6 +1847,7 @@ class CameraRenderer {
       }
     }
     this.drawDetections(ctx);
+    this.overlayDirty = false;
     requestAnimationFrame((nextTime) => this.draw(nextTime));
   }
 
@@ -1253,6 +1894,7 @@ class CameraRenderer {
 const store = new MissionStore();
 const mapRenderer = new MapRenderer($("#mapCanvas"), store);
 const cloudRenderer = new CloudRenderer($("#cloudCanvas"), store);
+const snakeRenderer = new SnakePoseRenderer($("#snakeCanvas"), store);
 const wsUrl = new URLSearchParams(window.location.search).get("ws");
 const cameraRenderer = new CameraRenderer($("#cameraCanvas"), $("#cameraStream"));
 if (wsUrl) {
@@ -1265,7 +1907,7 @@ const telemetrySource = wsUrl
   ? new WebSocketTelemetrySource(store, wsUrl)
   : new MockTelemetrySource(store);
 
-const rateOrder = ["RGB", "DEPTH", "VO", "SLAM", "IMU", "EKF"];
+const rateOrder = ["RGB", "DEPTH", "VO", "SLAM", "IMU50", "IMU51", "IMU52", "EKF"];
 $("#rateList").innerHTML = rateOrder.map((name) => `
   <div class="rate-row" data-rate="${name}">
     <span>${name}</span>
@@ -1295,7 +1937,11 @@ function renderDashboard(state) {
   $("#mapRateFooter").textContent = `${state.mapRate.toFixed(1)} Hz`;
   $("#mapNodes").textContent = state.mapNodes.toLocaleString();
   $("#exploredArea").textContent = `${(state.exploredCells.size * state.mapCellSize ** 2).toFixed(1)} m²`;
-  const visibleMapItems = state.exploredCells.size + state.cloudPoints.length;
+  const cloudPointCount = state.cloudPoints?.count
+    ?? state.cloudPointCount
+    ?? state.cloudPoints?.length
+    ?? 0;
+  const visibleMapItems = state.exploredCells.size + cloudPointCount;
   $("#mapMessage").classList.toggle("hidden", visibleMapItems > 90);
   $("#cameraTimestamp").textContent = new Date().toLocaleTimeString("ko-KR", { hour12: false });
   cameraRenderer.setFrame(state.cameraFrame);
@@ -1312,7 +1958,7 @@ function renderDashboard(state) {
 
   let healthy = 0;
   rateOrder.forEach((name) => {
-    const rate = state.rates[name];
+    const rate = state.rates[name] ?? { value: 0, expected: 1, ok: false };
     const row = document.querySelector(`[data-rate="${name}"]`);
     const ratio = clamp(rate.value / rate.expected, 0, 1);
     row.querySelector("i").style.width = `${ratio * 100}%`;
@@ -1321,16 +1967,18 @@ function renderDashboard(state) {
     if (rate.ok) healthy += 1;
   });
   $("#healthSummary").textContent = `${healthy} / ${rateOrder.length}`;
+  renderImuCards(state.imus ?? {});
 
   const personDetection = state.personDetection ?? {};
   const hasPerceptionTarget = state.source !== "simulation" && personDetection.detected;
   const hasTarget = hasPerceptionTarget || Boolean(state.target);
   if (state.source !== "simulation" && !personDetection.modelReady) {
     $("#perceptionStatus").textContent = "YOLO 대기 중";
-    $("#perceptionHint").innerHTML = "사람 전용 Pose 모델이<br />연결되지 않았습니다.";
+    const error = String(personDetection.error ?? "");
+    $("#perceptionHint").textContent = error || "사람 전용 YOLO 모델이 연결되지 않았습니다.";
   } else {
     $("#perceptionStatus").textContent = "탐색 중";
-    $("#perceptionHint").innerHTML = "사람 말단부가 감지되면<br />이곳에 표시됩니다.";
+    $("#perceptionHint").innerHTML = "사람이 감지되면<br />이곳에 표시됩니다.";
   }
   $("#targetCount").textContent = hasPerceptionTarget
     ? `${personDetection.count} FOUND`
@@ -1341,12 +1989,37 @@ function renderDashboard(state) {
     const candidate = personDetection.candidates?.[0] ?? {};
     const names = candidate.extremities?.map((item) => item.name) ?? [];
     const parts = names.length > 0 ? names.join(", ") : "사람";
-    $("#targetDistance").textContent = `${parts} / 신뢰도 ${Math.round((candidate.confidence ?? 0) * 100)}%`;
+    const distance = Number.isFinite(candidate.distanceMeters)
+      ? `${candidate.distanceMeters.toFixed(2)} m 거리 / `
+      : "거리 계산 중 / ";
+    $("#targetDistance").textContent = `${distance}${parts} / 신뢰도 ${Math.round((candidate.confidence ?? 0) * 100)}%`;
   } else if (state.target) {
     const distance = Math.hypot(state.target.x - state.pose.x, state.target.y - state.pose.y);
     $("#targetDistance").textContent = `${distance.toFixed(1)} m 거리 / 신뢰도 ${Math.round(state.target.confidence * 100)}%`;
   }
   renderEvents(state.events);
+}
+
+function renderImuCards(imus) {
+  const safeNumber = (value, digits = 1) => (
+    Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : "--"
+  );
+  $("#imuCardGrid").innerHTML = ["50", "51", "52"].map((sensorId) => {
+    const imu = imus[sensorId] ?? {};
+    const euler = imu.eulerDeg ?? {};
+    const quaternion = imu.quaternion ?? {};
+    return `
+      <article class="imu-card ${imu.online ? "online" : ""}">
+        <header><i></i>${imu.displayId ?? `0x${sensorId}`}<span>${imu.role ?? "UNASSIGNED"} · M${imu.moduleIndex ?? "--"}</span></header>
+        <div class="imu-values">
+          <div><span>R</span> ${safeNumber(euler.roll)}°</div>
+          <div><span>P</span> ${safeNumber(euler.pitch)}°</div>
+          <div><span>Y</span> ${safeNumber(euler.yaw)}°</div>
+          <div class="imu-quaternion">q [${safeNumber(quaternion.x, 3)}, ${safeNumber(quaternion.y, 3)}, ${safeNumber(quaternion.z, 3)}, ${safeNumber(quaternion.w, 3)}]</div>
+        </div>
+      </article>
+    `;
+  }).join("");
 }
 
 function renderEvents(events) {
@@ -1376,24 +2049,52 @@ function showToast(message) {
   showToast.timer = window.setTimeout(() => toast.classList.remove("visible"), 2600);
 }
 
-store.addEventListener("update", (event) => renderDashboard(event.detail));
+let dashboardRenderPending = false;
+let lastDashboardRender = 0;
+store.addEventListener("update", () => {
+  if (dashboardRenderPending) return;
+  dashboardRenderPending = true;
+  const delay = Math.max(0, 100 - (performance.now() - lastDashboardRender));
+  window.setTimeout(() => requestAnimationFrame(() => {
+    dashboardRenderPending = false;
+    lastDashboardRender = performance.now();
+    renderDashboard(store.state);
+  }), delay);
+});
 
 $$('.view-tab').forEach((button) => {
   button.addEventListener("click", () => {
     $$('.view-tab').forEach((item) => item.classList.remove("active"));
     button.classList.add("active");
-    const is3d = button.dataset.view === "3d";
-    mapRenderer.enabled = !is3d;
+    const view = button.dataset.view;
+    const is2d = view === "2d";
+    const is3d = view === "3d";
+    const isSnake = view === "snake";
+    mapRenderer.enabled = is2d;
     cloudRenderer.enabled = is3d;
-    $("#mapCanvas").classList.toggle("hidden-view", is3d);
+    snakeRenderer.enabled = isSnake;
+    $("#mapCanvas").classList.toggle("hidden-view", !is2d);
     $("#cloudCanvas").classList.toggle("hidden-view", !is3d);
+    $("#snakeCanvas").classList.toggle("hidden-view", !isSnake);
     $("#cloudViewActions").classList.toggle("hidden", !is3d);
-    $("#orbitHelp").classList.toggle("hidden", !is3d);
-    updateFollowButton(is3d ? cloudRenderer.follow : mapRenderer.follow);
-    if (is3d && cloudRenderer.failed) {
+    $("#snakeViewActions").classList.toggle("hidden", !isSnake);
+    $("#orbitHelp").classList.toggle("hidden", is2d);
+    $("#imuPosePanel").classList.toggle("hidden", !isSnake);
+    $("#mapStage").classList.toggle("snake-mode", isSnake);
+    if (!is3d) $("#targetMapLabel").classList.add("hidden");
+    $("#followButton").disabled = isSnake;
+    updateFollowButton(is3d ? cloudRenderer.follow : (is2d && mapRenderer.follow));
+    if (is3d) cloudRenderer.resize();
+    if (isSnake) snakeRenderer.resize();
+    if ((is3d && cloudRenderer.failed) || (isSnake && snakeRenderer.failed)) {
       showToast("이 브라우저에서 WebGL을 사용할 수 없습니다.");
     } else {
-      showToast(is3d ? "자유 회전 3D 포인트클라우드로 전환했습니다." : "탑다운 지도로 전환했습니다.");
+      const labels = {
+        "2d": "탑다운 지도로 전환했습니다.",
+        "3d": "자유 회전 3D 포인트클라우드로 전환했습니다.",
+        snake: "세 IMU 기반 뱀 로봇 자세로 전환했습니다.",
+      };
+      showToast(labels[view]);
     }
   });
 });
@@ -1410,19 +2111,25 @@ $("#followButton").addEventListener("click", () => {
   }
 });
 $("#centerButton").addEventListener("click", () => {
-  if (cloudRenderer.enabled) cloudRenderer.centerOnRobot();
+  if (snakeRenderer.enabled) snakeRenderer.setPreset("reset");
+  else if (cloudRenderer.enabled) cloudRenderer.centerOnRobot();
   else mapRenderer.center();
 });
 $("#zoomInButton").addEventListener("click", () => {
-  if (cloudRenderer.enabled) cloudRenderer.distance = clamp(cloudRenderer.distance / 1.15, 0.3, 100);
+  if (snakeRenderer.enabled) snakeRenderer.distance = clamp(snakeRenderer.distance / 1.15, 0.25, 12);
+  else if (cloudRenderer.enabled) cloudRenderer.distance = clamp(cloudRenderer.distance / 1.15, 0.3, 100);
   else mapRenderer.scale = clamp(mapRenderer.scale * 1.15, 28, 150);
 });
 $("#zoomOutButton").addEventListener("click", () => {
-  if (cloudRenderer.enabled) cloudRenderer.distance = clamp(cloudRenderer.distance * 1.15, 0.3, 100);
+  if (snakeRenderer.enabled) snakeRenderer.distance = clamp(snakeRenderer.distance * 1.15, 0.25, 12);
+  else if (cloudRenderer.enabled) cloudRenderer.distance = clamp(cloudRenderer.distance * 1.15, 0.3, 100);
   else mapRenderer.scale = clamp(mapRenderer.scale / 1.15, 28, 150);
 });
 $$('[data-cloud-view]').forEach((button) => {
   button.addEventListener("click", () => cloudRenderer.setPreset(button.dataset.cloudView));
+});
+$$('[data-snake-view]').forEach((button) => {
+  button.addEventListener("click", () => snakeRenderer.setPreset(button.dataset.snakeView));
 });
 $("#clearEvents").addEventListener("click", () => { store.state.events = []; renderEvents([]); });
 $("#estopButton").addEventListener("click", () => showToast("시제품 UI입니다. 실제 정지 명령은 연결되지 않았습니다."));
@@ -1432,4 +2139,8 @@ $("#fullscreenButton").addEventListener("click", async () => {
 });
 
 renderDashboard(store.state);
+const initialView = new URLSearchParams(window.location.search).get("view");
+if (["2d", "3d", "snake"].includes(initialView) && initialView !== "2d") {
+  document.querySelector(`[data-view="${initialView}"]`)?.click();
+}
 telemetrySource.start();

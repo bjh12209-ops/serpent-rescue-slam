@@ -3,9 +3,8 @@
 One dedicated I/O thread owns the half-duplex RS485 bus and polls all configured Modbus
 addresses in sequence. No per-sensor serial threads are used, so requests cannot collide.
 
-The current configuration polls the connected sensor at Modbus address `0x52`
-at 60 Hz. The driver supports multiple addresses on the same half-duplex bus,
-but additional IDs must be verified with a bus scan before they are enabled.
+The current configuration polls `0x50` (head), `0x51` (middle), and `0x52`
+(tail) sequentially on the same half-duplex bus with a 45 Hz target loop.
 Each sensor publishes:
 
 - `/imu_XX/data` (`sensor_msgs/msg/Imu`)
@@ -24,7 +23,7 @@ source install/setup.bash
 ros2 launch wt901c485_driver wt901c485.launch.py
 ```
 
-When additional sensors are installed, add only their verified decimal Modbus
-IDs to `sensor_ids`. At 115200 baud, multiple sensors at high rate leave little
+When sensors are added or replaced, put only their verified decimal Modbus IDs
+in `sensor_ids`. At 115200 baud, multiple sensors at high rate leave little
 RS485 bandwidth margin; use the logged actual rates and timeout counts to choose
 a safe per-sensor rate.

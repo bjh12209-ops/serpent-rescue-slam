@@ -18,8 +18,8 @@ rtabmap:
     # timestamps are close but are not guaranteed to be exactly identical.
     approx_sync: true
     approx_sync_max_interval: 0.02
-    topic_queue_size: 10
-    sync_queue_size: 20
+    topic_queue_size: 3
+    sync_queue_size: 5
     qos_image: 2
     qos_camera_info: 2
     qos_imu: 1
@@ -27,12 +27,13 @@ rtabmap:
     Reg/Strategy: "0"
     Optimizer/GravitySigma: "0.3"
     # The camera and odometry stay at 30 Hz. Process online map/loop-closure
-    # updates at 5 Hz instead of the 1 Hz RTAB-Map default. Mapping at the full
-    # camera rate needlessly grows CPU load, the graph and the database.
-    Rtabmap/DetectionRate: "5.0"
-    Rtabmap/TimeThr: "0"
-    Kp/MaxFeatures: "1000"
-    Vis/MaxFeatures: "1500"
+    # Measured map updates reached 0.3-1.9 seconds on this mini PC. A 5 Hz
+    # request therefore built a permanent backlog. Two graph updates per
+    # second keep camera/VO live while remaining adequate for online mapping.
+    Rtabmap/DetectionRate: "2.0"
+    Rtabmap/TimeThr: "450"
+    Kp/MaxFeatures: "700"
+    Vis/MaxFeatures: "1000"
     Vis/MinInliers: "20"
     RGBD/LinearUpdate: "0.05"
     RGBD/AngularUpdate: "0.05"
@@ -43,6 +44,6 @@ rtabmap:
     Grid/FromDepth: "true"
     Grid/3D: "true"
     Grid/CellSize: "0.03"
-    Grid/DepthDecimation: "1"
+    Grid/DepthDecimation: "2"
     Grid/RangeMax: "5.0"
-    Grid/RayTracing: "true"
+    Grid/RayTracing: "false"

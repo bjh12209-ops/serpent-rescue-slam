@@ -6,7 +6,8 @@
 
 ```text
 D435 RGB + aligned depth -> RGB-D visual odometry --┐
-WT901C485 0x52 -> orientation/angular velocity ------┤
+WT901C485 0x50 head -> orientation/angular velocity --┤
+WT901C485 0x51/0x52 -> module pose visualization      │
                                                      v
                                          robot_localization EKF
                                                      |
@@ -27,8 +28,8 @@ WT901C485 0x52 -> orientation/angular velocity ------┤
 
 ```text
 map --RTAB-Map--> odom --EKF--> base_link
-                                  ├── camera_link (+0.05 m x)
-                                  └── imu_52_link
+                                  └── camera_link
+                                        └── imu_50_link (-0.05, 0, +0.02 m)
 ```
 
 - RTAB-Map만 `map -> odom`을 발행한다.
@@ -40,9 +41,11 @@ map --RTAB-Map--> odom --EKF--> base_link
 
 | 데이터 | ROS 인터페이스 | 소비자 |
 |---|---|---|
-| D435 RGB | `/camera/camera/color/image_raw` | VO, RTAB-Map, YOLO, 웹 카메라 |
+| D435 RGB | `/camera/camera/color/image_raw` | VO, RTAB-Map, gateway 웹 카메라 |
+| YOLO 입력 | `/mission_control/yolo_input` | 320 px/2 Hz person detector |
 | aligned depth | `/camera/camera/aligned_depth_to_color/image_raw` | VO, RTAB-Map |
-| WT901 IMU | `/imu_52/data` | EKF |
+| head WT901 IMU | `/imu_50/data` | EKF, gateway |
+| middle/tail WT901 IMU | `/imu_51/data`, `/imu_52/data` | gateway body-pose view |
 | visual odometry | `/visual_odom` | EKF, 텔레메트리 |
 | filtered odometry | `/odometry/filtered` | RTAB-Map, 텔레메트리 |
 | 2D map | `/map` | RViz, gateway |
@@ -71,8 +74,8 @@ gateway는 읽기 전용이며 로봇 제어 토픽을 발행하지 않는다. �
 ## 품질 기준
 
 - D435 RGB/depth와 VO는 약 30 Hz를 목표로 한다.
-- WT901과 EKF는 약 60 Hz를 목표로 한다.
-- RTAB-Map 지도 갱신은 CPU 부하를 고려해 3~5 Hz로 운용한다.
+- WT901과 EKF는 실제 RS485 여유를 고려해 약 45 Hz를 목표로 한다.
+- RTAB-Map 지도 갱신은 CPU 부하를 고려해 2 Hz로 운용한다.
 - 시작점 재방문 시 loop closure가 수락돼야 한다.
 - 지도, 현재 pose와 실제 경로가 같은 `map` 좌표에서 일치해야 한다.
 - 카메라나 점군 지연이 WebSocket 큐에 누적되지 않아야 한다.

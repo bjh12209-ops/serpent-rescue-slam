@@ -12,7 +12,8 @@ Ubuntu 22.04와 ROS 2 Humble에서 Intel RealSense D435, WT901C485 IMU,
 
 ```text
 D435 RGB + aligned depth -> RGB-D visual odometry --┐
-WT901C485 IMU -------------------------------> EKF --┤
+WT901C485 0x50 (head) ------------------------> EKF --┤
+WT901C485 0x51/0x52 -----------------> body pose UI   │
                                                      v
                                             RTAB-Map SLAM
                                                      |
@@ -32,21 +33,26 @@ WT901C485 IMU -------------------------------> EKF --┤
 
 - Ubuntu 22.04, ROS 2 Humble
 - Intel RealSense D435
-- WitMotion WT901C485 한 개, Modbus 주소 `0x52`
+- WitMotion WT901C485 세 개: `0x50` 머리, `0x51` 중간, `0x52` 꼬리
 - USB-RS485 어댑터
-- 임시 센서 TF: 카메라는 IMU보다 x축 전방으로 `0.05 m`
+- 임시 센서 TF: `camera_link -> imu_50_link = (-0.05, 0, +0.02) m`
 
 최종 장착 후에는 카메라와 IMU의 실제 위치와 회전을 다시 측정해 고정 TF를
 수정해야 합니다.
 
 ## 새 PC에서 내려받기
 
-저장소 Collaborator로 초대받고 SSH 키를 GitHub에 등록한 뒤 실행합니다.
+공개 저장소이므로 실행만 하는 PC나 Jetson에서는 GitHub 계정과 SSH 키 없이
+HTTPS로 받을 수 있습니다.
 
 ```bash
-git clone git@github.com:bjh12209-ops/serpent-rescue-slam.git ~/ros2_ws
+git clone https://github.com/bjh12209-ops/serpent-rescue-slam.git ~/ros2_ws
 cd ~/ros2_ws
 ```
+
+코드를 받는 것만으로 OS, ROS, RealSense 드라이버와 YOLO 런타임까지 설치되지는
+않습니다. Jetson Orin Nano Super 배포 순서는
+[Jetson 배포 가이드](docs/jetson_orin_nano_setup.md)를 따릅니다.
 
 필수 ROS 패키지를 설치합니다.
 
@@ -96,7 +102,8 @@ source install/setup.bash
 ros2 launch my_robot_bringup mission_control.launch.py
 ```
 
-브라우저에서 `http://localhost:8080`을 엽니다. 2D 지도, 3D 점군,
+브라우저에서 `http://localhost:8080`을 엽니다. 2D 지도, 3D 점군, 세 IMU의
+3-module 자세,
 현재 위치와 방향, 실제 동선, 주행거리, ROS 토픽 주기와 D435 RGB 영상을
 확인할 수 있습니다.
 

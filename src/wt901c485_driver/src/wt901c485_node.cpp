@@ -206,8 +206,9 @@ public:
     const std::string port = declare_parameter<std::string>(
       "port", "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0");
     const int baud = declare_parameter<int>("baud_rate", 115200);
-    const auto ids = declare_parameter<std::vector<int64_t>>("sensor_ids", {81});
-    rate_hz_ = declare_parameter<double>("rate_hz", 60.0);
+    const auto ids = declare_parameter<std::vector<int64_t>>(
+      "sensor_ids", {80, 81, 82});
+    rate_hz_ = declare_parameter<double>("rate_hz", 45.0);
     timeout_ = std::chrono::microseconds(
       declare_parameter<int>("response_timeout_us", 12000));
     offline_retry_ = std::chrono::milliseconds(
