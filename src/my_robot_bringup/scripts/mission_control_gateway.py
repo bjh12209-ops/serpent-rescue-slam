@@ -213,31 +213,50 @@ def point_cloud_records(message, maximum, min_z, max_z):
     return records
 
 
-def merge_cloud_records(previous, candidate, maximum, voxel_size):
-    """Merge map samples into a bounded persistent voxel cache."""
+def voxelize_cloud_records(candidate, maximum, voxel_size):
+    """Voxelize one complete RTAB-Map cloud snapshot."""
     if candidate is None or len(candidate) == 0:
-        return previous
-    if previous is None or len(previous) == 0:
-        combined = candidate
-    else:
-        combined = np.concatenate((previous, candidate))
-
+        return candidate
     resolution = max(float(voxel_size), 0.005)
     coordinates = np.column_stack((
-        combined["x"], combined["y"], combined["z"],
+        candidate["x"], candidate["y"], candidate["z"],
     ))
     voxel_keys = np.floor(coordinates / resolution).astype(np.int64)
-    # Search backwards so the newest RGB sample wins inside an existing voxel.
+    # Search backwards so the newest RGB sample wins inside this snapshot.
     _, reverse_indices = np.unique(
         voxel_keys[::-1], axis=0, return_index=True
     )
-    keep = len(combined) - 1 - reverse_indices
-    merged = combined[np.sort(keep)]
+    keep = len(candidate) - 1 - reverse_indices
+    voxelized = candidate[np.sort(keep)]
     limit = max(1, int(maximum))
-    if len(merged) > limit:
-        sample = np.linspace(0, len(merged) - 1, limit, dtype=np.int64)
-        merged = merged[sample]
-    return np.ascontiguousarray(merged)
+    if len(voxelized) > limit:
+        sample = np.linspace(0, len(voxelized) - 1, limit, dtype=np.int64)
+        voxelized = voxelized[sample]
+    return np.ascontiguousarray(voxelized)
+
+
+def select_cloud_snapshot(
+    previous,
+    candidate,
+    maximum,
+    voxel_size,
+    minimum_baseline=500,
+    minimum_ratio=0.15,
+):
+    """Keep a previous map only when a new complete snapshot is implausible."""
+    fresh = voxelize_cloud_records(candidate, maximum, voxel_size)
+    if fresh is None or len(fresh) == 0:
+        return previous, False
+    if (
+        previous is not None
+        and len(previous) >= int(minimum_baseline)
+        and len(fresh) < len(previous) * float(minimum_ratio)
+    ):
+        return previous, False
+    # /cloud_map is already a globally optimized accumulated map. Unioning it
+    # with an older snapshot preserves pre-loop-closure poses and creates the
+    # smeared duplicate walls seen in the browser.
+    return fresh, True
 
 
 def cloud_records_packet(records):
@@ -1087,12 +1106,15 @@ class MissionControlGateway(Node):
             if len(records) == 0:
                 continue
             with self.state_lock:
-                self.cloud_records = merge_cloud_records(
+                selected, accepted = select_cloud_snapshot(
                     self.cloud_records,
                     records,
                     int(self.get_parameter("max_cloud_points").value),
                     float(self.get_parameter("cloud_voxel_size").value),
                 )
+                if not accepted:
+                    continue
+                self.cloud_records = selected
                 self.cloud_packet = cloud_records_packet(self.cloud_records)
                 self.state["cloudPointCount"] = len(self.cloud_records)
                 packet = self.cloud_packet

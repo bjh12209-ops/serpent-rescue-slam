@@ -64,8 +64,27 @@ def generate_launch_description():
                 "pointcloud.enable": False,
                 "enable_gyro": False,
                 "enable_accel": False,
-                "rgb_camera.color_profile": "640,480,30",
-                "depth_module.depth_profile": "640,480,30",
+                # RealSense recommends 848x480@30 for D435 depth quality.
+                # High Accuracy rejects low-confidence stereo matches instead
+                # of spraying them into every later SLAM cloud snapshot.
+                "rgb_camera.color_profile": "848,480,30",
+                "depth_module.depth_profile": "848,480,30",
+                "depth_module.visual_preset": 3,
+                "depth_module.enable_auto_exposure": True,
+                "depth_module.emitter_enabled": 1,
+                "depth_module.laser_power": 360.0,
+                "depth_module.frames_queue_size": 2,
+                # Spatial disparity filtering improves near edges without the
+                # motion trails a temporal filter can create on a shaking head.
+                "disparity_filter.enable": True,
+                "spatial_filter.enable": True,
+                "spatial_filter.filter_magnitude": 2,
+                "spatial_filter.filter_smooth_alpha": 0.5,
+                "spatial_filter.filter_smooth_delta": 20.0,
+                "spatial_filter.holes_fill": 1,
+                "temporal_filter.enable": False,
+                "hole_filling_filter.enable": False,
+                "disparity_to_depth.enable": True,
             }],
         ),
         IncludeLaunchDescription(

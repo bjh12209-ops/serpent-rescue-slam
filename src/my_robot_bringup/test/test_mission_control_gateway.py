@@ -76,13 +76,13 @@ def test_cloud_packet_is_bounded_colored_and_filters_invalid_height():
     assert tuple(packet[20:23]) == (0x11, 0x22, 0x33)
 
 
-def test_sparse_cloud_is_merged_without_erasing_cached_map():
+def test_sparse_cloud_does_not_erase_a_complete_snapshot():
     previous = MODULE.point_cloud_records(
         packed_cloud([
-            (0.0, 0.0, 0.0, 0x112233),
-            (1.0, 0.0, 0.0, 0x445566),
+            (index * 0.05, 0.0, 0.0, 0x112233)
+            for index in range(600)
         ]),
-        maximum=10,
+        maximum=1000,
         min_z=-1.0,
         max_z=1.0,
     )
@@ -92,22 +92,42 @@ def test_sparse_cloud_is_merged_without_erasing_cached_map():
         min_z=-1.0,
         max_z=1.0,
     )
-    merged = MODULE.merge_cloud_records(
-        previous, candidate, maximum=10, voxel_size=0.04
+    selected, accepted = MODULE.select_cloud_snapshot(
+        previous, candidate, maximum=1000, voxel_size=0.03
     )
-    assert len(merged) == 3
-    assert set(merged["x"]) == {0.0, 1.0, 2.0}
+    assert accepted is False
+    assert selected is previous
+
+
+def test_complete_snapshot_replaces_old_optimized_coordinates():
+    previous = MODULE.point_cloud_records(
+        packed_cloud([
+            (0.0, 0.0, 0.0, 0x112233),
+            (1.0, 0.0, 0.0, 0x445566),
+        ]), 10, -1.0, 1.0
+    )
+    candidate = MODULE.point_cloud_records(
+        packed_cloud([
+            (10.0, 0.0, 0.0, 0x778899),
+            (11.0, 0.0, 0.0, 0xAABBCC),
+        ]), 10, -1.0, 1.0
+    )
+    selected, accepted = MODULE.select_cloud_snapshot(
+        previous, candidate, maximum=10, voxel_size=0.03
+    )
+    assert accepted is True
+    assert set(selected["x"]) == {10.0, 11.0}
 
 
 def test_newest_color_replaces_same_voxel_without_duplicate():
-    previous = MODULE.point_cloud_records(
-        packed_cloud([(0.0, 0.0, 0.0, 0x112233)]), 10, -1.0, 1.0
-    )
     candidate = MODULE.point_cloud_records(
-        packed_cloud([(0.01, 0.0, 0.0, 0xAABBCC)]), 10, -1.0, 1.0
+        packed_cloud([
+            (0.0, 0.0, 0.0, 0x112233),
+            (0.01, 0.0, 0.0, 0xAABBCC),
+        ]), 10, -1.0, 1.0
     )
-    merged = MODULE.merge_cloud_records(
-        previous, candidate, maximum=10, voxel_size=0.04
+    merged = MODULE.voxelize_cloud_records(
+        candidate, maximum=10, voxel_size=0.04
     )
     assert len(merged) == 1
     assert tuple(merged[["red", "green", "blue"]][0]) == (

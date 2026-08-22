@@ -31,4 +31,5 @@ rgbd_odometry:
     Odom/ResetCountdown: "0"
     OdomF2M/MaxSize: "1000"
     Vis/MinInliers: "15"
-    Vis/MaxDepth: "5.0"
+    Vis/MinDepth: "0.18"
+    Vis/MaxDepth: "3.5"

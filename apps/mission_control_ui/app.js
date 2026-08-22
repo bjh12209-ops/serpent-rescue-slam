@@ -308,8 +308,8 @@ class WebSocketTelemetrySource {
     const suspiciouslySparse = previousCount >= 500 && count < previousCount * 0.12;
     if (suspiciouslySparse) {
       this.sparseCloudStreak += 1;
-      // The server already keeps a persistent voxel cache. This second guard
-      // protects clients connected to an older or mixed-version gateway.
+      // The server retains the last valid full voxel snapshot. This second
+      // guard protects clients connected to an older or mixed-version gateway.
       return;
     }
     this.sparseCloudStreak = 0;

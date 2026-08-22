@@ -139,9 +139,11 @@ telemetry topics, `/slam/diagnostics`, `/map`, `/cloud_map`, `/info`, and
 the D435 color image. Large map, cloud, path, and image streams are bounded or
 throttled before they reach the browser. The PC default preserves RGB and up
 to 60,000 valid cloud points; `max_cloud_points` can be reduced for an SBC.
-Incoming points are merged into a persistent 3 cm voxel cache, so empty or
-partial RTAB-Map products cannot erase the visible map. `cloud_voxel_size` can
-be tuned independently, and only a new gateway session starts a new cache.
+Each complete cloud becomes a fresh 3 cm voxel snapshot, while an empty or
+implausibly partial RTAB-Map product keeps the last valid map visible. Complete
+snapshots are not unioned: `/cloud_map` is already accumulated and optimized,
+so keeping older coordinates would create smeared duplicate walls.
+`cloud_voxel_size` can be tuned independently.
 The default `OVERVIEW` renders 2D and 3D together while keeping the camera and
 person-only detection panels visible.
 The cloud renderer uses a persistent CPU raster/depth buffer rather than

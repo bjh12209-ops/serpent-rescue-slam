@@ -35,15 +35,21 @@ rtabmap:
     Kp/MaxFeatures: "700"
     Vis/MaxFeatures: "1000"
     Vis/MinInliers: "20"
+    Vis/MinDepth: "0.18"
+    Vis/MaxDepth: "3.5"
     RGBD/LinearUpdate: "0.05"
     RGBD/AngularUpdate: "0.05"
     RGBD/OptimizeFromGraphEnd: "false"
 
-    # Keep a 3 cm 3-D occupancy representation for navigation/debugging.
+    # Keep a 2 cm near-field representation. Full depth resolution preserves
+    # thin obstacles; the light radius filter removes isolated stereo spray.
     # The database also retains RGB-D data used by rtabmap-export for meshes.
     Grid/FromDepth: "true"
     Grid/3D: "true"
-    Grid/CellSize: "0.03"
-    Grid/DepthDecimation: "2"
-    Grid/RangeMax: "5.0"
+    Grid/CellSize: "0.02"
+    Grid/DepthDecimation: "1"
+    Grid/RangeMin: "0.18"
+    Grid/RangeMax: "3.5"
+    Grid/NoiseFilteringRadius: "0.04"
+    Grid/NoiseFilteringMinNeighbors: "2"
     Grid/RayTracing: "false"

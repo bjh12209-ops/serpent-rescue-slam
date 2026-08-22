@@ -2,17 +2,37 @@
 
 ## 현재 프로파일
 
-- D435 RGB/aligned depth: `640x480x30`
+- D435 RGB/aligned depth: `848x480x30`, High Accuracy preset
 - WT901C485 `0x50`/`0x51`/`0x52`: 각각 약 45 Hz 목표
 - RGB-D visual odometry: 카메라 입력 속도에 근접
 - EKF: 45 Hz
 - RTAB-Map 지도/그래프 갱신: 융합/카메라 전용 2 Hz
-- 3D occupancy cell: 3 cm
+- 3D occupancy cell: 2 cm, depth decimation 1
 - 임시 TF: `camera_link -> imu_50_link = (-0.05, 0, +0.02) m`, 회전 0
 
 30 Hz는 센서와 odometry 목표 주기다. 누적 3D 지도 생성, 특징 비교와
 loop closure를 매 프레임 수행하면 CPU, DB와 네트워크 사용량만 크게
 늘 수 있으므로 별도 주기로 운용한다.
+
+## D435 근거리 품질 프로파일
+
+현재 설정은 얇고 가까운 장애물의 형상을 보존하도록 다음처럼 구성한다.
+
+- `848x480x30`, High Accuracy, emitter/laser 활성화
+- disparity 기반 spatial filter 활성화
+- 진동·이동 중 과거 깊이 잔상을 피하기 위해 temporal filter 비활성화
+- RTAB-Map 유효 깊이 `0.18~3.5 m`, 2 cm cell, depth decimation 1
+- 4 cm 반경에서 이웃이 2개 미만인 고립점 제거
+
+D435의 848x480 최소 깊이는 약 19.5 cm이므로 실제 운용에서는 카메라 앞
+20 cm 이상을 신뢰 구간으로 본다. 이 거리보다 가까운 깊이가 비거나 튀는 것은
+SLAM 파라미터로 복원할 수 없다. 10~20 cm 충돌 감지가 필수라면 짧은 거리용
+ToF/IR/범퍼를 안전 계층에 추가하거나 D405 같은 근거리 카메라를 검토한다.
+
+High Accuracy는 잘못된 점을 줄이는 대신 깊이 구멍이 늘 수 있다. 실제 현장에서
+벽이 깨끗하지만 빈 영역이 지나치게 많다면 `depth_module.visual_preset`을 Medium
+Density 계열로 A/B 비교한다. 재질, 조명, 반사와 진동 조건을 고정하고 같은 경로를
+두 번 기록해 이중 벽 두께와 VO lost 횟수로 판단한다.
 
 ## 1. 빌드
 

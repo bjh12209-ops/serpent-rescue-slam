@@ -25,4 +25,5 @@ rgbd_odometry:
     OdomF2M/MaxSize: "1200"
     Vis/MinInliers: "20"
     Vis/MaxFeatures: "1000"
-    Vis/MaxDepth: "5.0"
+    Vis/MinDepth: "0.18"
+    Vis/MaxDepth: "3.5"
