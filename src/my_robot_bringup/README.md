@@ -138,12 +138,15 @@ read-only WebSocket telemetry endpoint automatically. It consumes the `/slam/*`
 telemetry topics, `/slam/diagnostics`, `/map`, `/cloud_map`, `/info`, and
 the D435 color image. Large map, cloud, path, and image streams are bounded or
 throttled before they reach the browser. The PC default preserves RGB and up
-to 30,000 valid cloud points; `max_cloud_points` can be reduced for an SBC.
-Incoming points are merged into a persistent 4 cm voxel cache, so empty or
+to 60,000 valid cloud points; `max_cloud_points` can be reduced for an SBC.
+Incoming points are merged into a persistent 3 cm voxel cache, so empty or
 partial RTAB-Map products cannot erase the visible map. `cloud_voxel_size` can
 be tuned independently, and only a new gateway session starts a new cache.
 The default `OVERVIEW` renders 2D and 3D together while keeping the camera and
 person-only detection panels visible.
+The cloud renderer uses a persistent CPU raster/depth buffer rather than
+WebGL. A completed frame is swapped in atomically while the previous frame
+remains visible, avoiding blank frames on integrated GPUs.
 The camera itself uses an independent latest-frame-only `/camera.mjpg` stream
 at up to 20 FPS, so cloud telemetry cannot create a camera backlog. The gateway
 also publishes a 320 px, 2 Hz `/mission_control/yolo_input`; YOLO does not copy

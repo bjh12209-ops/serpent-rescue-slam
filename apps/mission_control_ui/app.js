@@ -1447,6 +1447,399 @@ class CloudRenderer {
   }
 }
 
+class StableCloudRenderer {
+  constructor(canvas, store) {
+    this.canvas = canvas;
+    this.store = store;
+    this.context = canvas.getContext("2d", { alpha: false });
+    this.layer = document.createElement("canvas");
+    this.layerContext = this.layer.getContext("2d", { alpha: false });
+    this.enabled = true;
+    this.failed = !this.context || !this.layerContext;
+    this.follow = false;
+    this.autoFrame = true;
+    this.yaw = -Math.PI / 4;
+    this.pitch = 0.62;
+    this.distance = 6;
+    this.target = { x: 0, y: 0, z: 0.35 };
+    this.positions = null;
+    this.colors = null;
+    this.count = 0;
+    this.bounds = null;
+    this.cloudReference = null;
+    this.drag = null;
+    this.pixelRatio = 1;
+    this.baseDirty = true;
+    this.overlayDirty = true;
+    this.lastBaseRender = 0;
+    this.lastCompositeRender = 0;
+    this.frames = [];
+    if (this.failed) return;
+    this.bindEvents();
+    new ResizeObserver(() => this.resize()).observe(canvas.parentElement);
+    this.store.addEventListener("update", () => {
+      this.overlayDirty = true;
+      if (this.store.state.cloudPoints !== this.cloudReference) {
+        this.syncCloud(this.store.state.cloudPoints);
+      }
+    });
+    this.resize();
+    requestAnimationFrame((time) => this.draw(time));
+  }
+
+  bindEvents() {
+    this.canvas.addEventListener("contextmenu", (event) => event.preventDefault());
+    this.canvas.addEventListener("pointerdown", (event) => {
+      const pan = event.button === 1 || event.button === 2
+        || event.shiftKey || event.ctrlKey || event.metaKey;
+      this.drag = { x: event.clientX, y: event.clientY, mode: pan ? "pan" : "orbit" };
+      this.canvas.setPointerCapture(event.pointerId);
+      this.canvas.classList.add("dragging");
+    });
+    this.canvas.addEventListener("pointermove", (event) => {
+      if (!this.drag) return;
+      const dx = event.clientX - this.drag.x;
+      const dy = event.clientY - this.drag.y;
+      this.drag.x = event.clientX;
+      this.drag.y = event.clientY;
+      if (this.drag.mode === "orbit") {
+        this.yaw -= dx * 0.008;
+        this.pitch = clamp(
+          this.pitch + dy * 0.008,
+          -Math.PI / 2 + 0.02,
+          Math.PI / 2 - 0.02,
+        );
+      } else {
+        this.follow = false;
+        this.autoFrame = false;
+        const amount = this.distance * 0.0015;
+        this.target.x += (-dx * Math.sin(this.yaw) - dy * Math.cos(this.yaw)) * amount;
+        this.target.y += (dx * Math.cos(this.yaw) - dy * Math.sin(this.yaw)) * amount;
+        this.target.z += dy * Math.sin(this.pitch) * amount;
+        updateFollowButton(false);
+      }
+      this.baseDirty = true;
+      this.overlayDirty = true;
+    });
+    const finish = () => {
+      this.drag = null;
+      this.canvas.classList.remove("dragging");
+    };
+    this.canvas.addEventListener("pointerup", finish);
+    this.canvas.addEventListener("pointercancel", finish);
+    this.canvas.addEventListener("lostpointercapture", finish);
+    this.canvas.addEventListener("wheel", (event) => {
+      event.preventDefault();
+      this.follow = false;
+      this.autoFrame = false;
+      this.distance = clamp(this.distance * Math.exp(event.deltaY * 0.001), 0.3, 100);
+      this.baseDirty = true;
+      this.overlayDirty = true;
+      updateFollowButton(false);
+    }, { passive: false });
+    this.canvas.addEventListener("dblclick", () => this.setPreset("fit"));
+  }
+
+  resize() {
+    const bounds = this.canvas.getBoundingClientRect();
+    this.pixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
+    const width = Math.max(1, Math.round(bounds.width * this.pixelRatio));
+    const height = Math.max(1, Math.round(bounds.height * this.pixelRatio));
+    if (this.canvas.width === width && this.canvas.height === height) return;
+    this.canvas.width = width;
+    this.canvas.height = height;
+    this.layer.width = width;
+    this.layer.height = height;
+    this.baseDirty = true;
+    this.overlayDirty = true;
+  }
+
+  syncCloud(cloud) {
+    if (cloud === this.cloudReference) return;
+    let positions = null;
+    let colors = null;
+    if (cloud?.positions instanceof Float32Array && cloud.positions.length >= 3) {
+      positions = cloud.positions;
+      colors = cloud.colors;
+    } else if (Array.isArray(cloud) && cloud.length > 0) {
+      positions = new Float32Array(cloud.length * 3);
+      colors = new Float32Array(cloud.length * 3);
+      cloud.forEach((point, index) => {
+        positions.set(point.slice(0, 3), index * 3);
+        colors.set([
+          (point[3] ?? 100) / 255,
+          (point[4] ?? 180) / 255,
+          (point[5] ?? 150) / 255,
+        ], index * 3);
+      });
+    }
+    // An empty transport update is not allowed to touch the completed layer.
+    if (!positions || positions.length < 3) return;
+
+    const minimum = [Infinity, Infinity, Infinity];
+    const maximum = [-Infinity, -Infinity, -Infinity];
+    for (let index = 0; index < positions.length; index += 3) {
+      for (let axis = 0; axis < 3; axis += 1) {
+        minimum[axis] = Math.min(minimum[axis], positions[index + axis]);
+        maximum[axis] = Math.max(maximum[axis], positions[index + axis]);
+      }
+    }
+    this.positions = positions;
+    this.colors = colors;
+    this.count = positions.length / 3;
+    this.bounds = { minimum, maximum };
+    this.cloudReference = cloud;
+    if (this.autoFrame) this.fitToCloud();
+    this.baseDirty = true;
+    this.overlayDirty = true;
+  }
+
+  eyePosition() {
+    const cosPitch = Math.cos(this.pitch);
+    return [
+      this.target.x + this.distance * cosPitch * Math.cos(this.yaw),
+      this.target.y + this.distance * cosPitch * Math.sin(this.yaw),
+      this.target.z + this.distance * Math.sin(this.pitch),
+    ];
+  }
+
+  viewProjection() {
+    const verticalFov = Math.PI / 3;
+    const aspect = this.canvas.width / Math.max(this.canvas.height, 1);
+    const projection = perspectiveMatrix(verticalFov, aspect, 0.01, 300);
+    return matrixMultiply(
+      projection,
+      lookAtMatrix(
+        this.eyePosition(),
+        [this.target.x, this.target.y, this.target.z],
+        [0, 0, 1],
+      ),
+    );
+  }
+
+  project(matrix, x, y, z) {
+    const clipX = matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12];
+    const clipY = matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13];
+    const clipZ = matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14];
+    const clipW = matrix[3] * x + matrix[7] * y + matrix[11] * z + matrix[15];
+    if (!Number.isFinite(clipW) || clipW <= 0.001) return null;
+    const normalizedX = clipX / clipW;
+    const normalizedY = clipY / clipW;
+    if (Math.abs(normalizedX) > 1.02 || Math.abs(normalizedY) > 1.02) return null;
+    return {
+      x: Math.round((normalizedX * 0.5 + 0.5) * (this.canvas.width - 1)),
+      y: Math.round((0.5 - normalizedY * 0.5) * (this.canvas.height - 1)),
+      depth: clipZ / clipW,
+    };
+  }
+
+  fitToCloud() {
+    if (!this.bounds) return;
+    const { minimum, maximum } = this.bounds;
+    this.target = {
+      x: (minimum[0] + maximum[0]) / 2,
+      y: (minimum[1] + maximum[1]) / 2,
+      z: (minimum[2] + maximum[2]) / 2,
+    };
+    const extents = maximum.map((value, index) => value - minimum[index]);
+    const radius = Math.max(Math.hypot(...extents) / 2, 0.5);
+    const aspect = this.canvas.width / Math.max(this.canvas.height, 1);
+    const verticalFov = Math.PI / 3;
+    const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * aspect);
+    const limitingFov = Math.max(0.2, Math.min(verticalFov, horizontalFov));
+    this.distance = clamp(radius / Math.tan(limitingFov / 2) * 1.25, 1.5, 100);
+    this.follow = false;
+    this.baseDirty = true;
+    updateFollowButton(false);
+  }
+
+  centerOnRobot() {
+    const pose = this.store.state.pose;
+    this.target = { x: pose.x, y: pose.y, z: pose.z + 0.25 };
+    this.follow = true;
+    this.autoFrame = false;
+    this.baseDirty = true;
+    updateFollowButton(true);
+  }
+
+  setPreset(name) {
+    if (name === "top") {
+      this.yaw = -Math.PI / 2;
+      this.pitch = Math.PI / 2 - 0.02;
+    } else if (name === "front") {
+      this.yaw = -Math.PI / 2;
+      this.pitch = 0.08;
+    } else if (name === "side") {
+      this.yaw = 0;
+      this.pitch = 0.08;
+    } else if (name === "fit") {
+      this.autoFrame = true;
+      this.fitToCloud();
+    } else if (name === "reset") {
+      this.yaw = -Math.PI / 4;
+      this.pitch = 0.62;
+      this.autoFrame = true;
+      this.fitToCloud();
+    }
+    this.baseDirty = true;
+    this.overlayDirty = true;
+  }
+
+  drawGrid(context, matrix) {
+    context.lineWidth = Math.max(1, this.pixelRatio * 0.7);
+    for (let value = -25; value <= 25; value += 1) {
+      const major = value % 5 === 0;
+      context.strokeStyle = major ? "rgba(36, 91, 75, 0.55)" : "rgba(20, 48, 42, 0.38)";
+      [[value, -25, value, 25], [-25, value, 25, value]].forEach((line) => {
+        const start = this.project(matrix, line[0], line[1], -0.03);
+        const end = this.project(matrix, line[2], line[3], -0.03);
+        if (!start || !end) return;
+        context.beginPath();
+        context.moveTo(start.x, start.y);
+        context.lineTo(end.x, end.y);
+        context.stroke();
+      });
+    }
+  }
+
+  rebuildLayer() {
+    const context = this.layerContext;
+    const width = this.layer.width;
+    const height = this.layer.height;
+    context.fillStyle = "#071014";
+    context.fillRect(0, 0, width, height);
+    const matrix = this.viewProjection();
+    this.drawGrid(context, matrix);
+    if (!this.positions || this.count === 0) return;
+
+    const image = context.getImageData(0, 0, width, height);
+    const pixels = image.data;
+    const depth = new Float32Array(width * height);
+    depth.fill(Infinity);
+    const radius = this.pixelRatio > 1.2 ? 1 : 0;
+    for (let index = 0; index < this.positions.length; index += 3) {
+      const projected = this.project(
+        matrix,
+        this.positions[index],
+        this.positions[index + 1],
+        this.positions[index + 2],
+      );
+      if (!projected || projected.depth < -1 || projected.depth > 1) continue;
+      for (let offsetY = -radius; offsetY <= radius; offsetY += 1) {
+        const y = projected.y + offsetY;
+        if (y < 0 || y >= height) continue;
+        for (let offsetX = -radius; offsetX <= radius; offsetX += 1) {
+          const x = projected.x + offsetX;
+          if (x < 0 || x >= width) continue;
+          const pixelIndex = y * width + x;
+          if (projected.depth >= depth[pixelIndex]) continue;
+          depth[pixelIndex] = projected.depth;
+          const target = pixelIndex * 4;
+          pixels[target] = Math.round(clamp(this.colors[index], 0, 1) * 255);
+          pixels[target + 1] = Math.round(clamp(this.colors[index + 1], 0, 1) * 255);
+          pixels[target + 2] = Math.round(clamp(this.colors[index + 2], 0, 1) * 255);
+          pixels[target + 3] = 255;
+        }
+      }
+    }
+    context.putImageData(image, 0, 0);
+  }
+
+  drawOverlays(context, matrix) {
+    const state = this.store.state;
+    if (state.path?.length > 1) {
+      context.strokeStyle = "#54f5a9";
+      context.lineWidth = 2 * this.pixelRatio;
+      context.beginPath();
+      let started = false;
+      state.path.forEach((point) => {
+        const screen = this.project(matrix, point.x, point.y, (point.z ?? 0) + 0.04);
+        if (!screen) return;
+        if (!started) context.moveTo(screen.x, screen.y);
+        else context.lineTo(screen.x, screen.y);
+        started = true;
+      });
+      if (started) context.stroke();
+    }
+    const markers = [
+      [state.start, "#54f5a9", 5],
+      [state.pose, "#ff8b42", 7],
+      [state.target, "#ffd166", 6],
+    ];
+    markers.forEach(([point, color, size]) => {
+      if (!point) return;
+      const screen = this.project(matrix, point.x, point.y, (point.z ?? 0) + 0.1);
+      if (!screen) return;
+      context.fillStyle = color;
+      context.beginPath();
+      context.arc(screen.x, screen.y, size * this.pixelRatio, 0, Math.PI * 2);
+      context.fill();
+    });
+    this.updateTargetLabel(matrix);
+  }
+
+  updateTargetLabel(matrix) {
+    const label = $("#targetMapLabel");
+    const target = this.store.state.target;
+    if (!target) {
+      label.classList.add("hidden");
+      return;
+    }
+    const projected = this.project(matrix, target.x, target.y, target.z ?? 0.2);
+    if (!projected) {
+      label.classList.add("hidden");
+      return;
+    }
+    const canvasBounds = this.canvas.getBoundingClientRect();
+    const stageBounds = this.canvas.parentElement.getBoundingClientRect();
+    label.style.left = `${canvasBounds.left - stageBounds.left + projected.x / this.pixelRatio}px`;
+    label.style.top = `${canvasBounds.top - stageBounds.top + projected.y / this.pixelRatio}px`;
+    const distance = Number.isFinite(target.distanceMeters)
+      ? target.distanceMeters
+      : Math.hypot(
+        target.x - this.store.state.pose.x,
+        target.y - this.store.state.pose.y,
+        (target.z ?? 0) - (this.store.state.pose.z ?? 0),
+      );
+    label.textContent = `${target.id}  ${distance.toFixed(2)} m`;
+    label.classList.remove("hidden");
+  }
+
+  draw(timestamp) {
+    if (this.enabled && !this.failed) {
+      if (this.follow) {
+        const pose = this.store.state.pose;
+        this.target = { x: pose.x, y: pose.y, z: pose.z + 0.25 };
+        this.baseDirty = true;
+      }
+      const basePeriod = this.drag ? 50 : 100;
+      if (this.baseDirty && timestamp - this.lastBaseRender >= basePeriod) {
+        this.rebuildLayer();
+        this.baseDirty = false;
+        this.overlayDirty = true;
+        this.lastBaseRender = timestamp;
+      }
+      if (this.overlayDirty && timestamp - this.lastCompositeRender >= 33) {
+        const context = this.context;
+        context.setTransform(1, 0, 0, 1, 0, 0);
+        context.drawImage(this.layer, 0, 0);
+        this.drawOverlays(context, this.viewProjection());
+        this.overlayDirty = false;
+        this.lastCompositeRender = timestamp;
+        this.frames.push(timestamp);
+        while (this.frames.length > 1 && timestamp - this.frames[0] > 1000) {
+          this.frames.shift();
+        }
+        $("#renderRate").textContent = `${Math.max(0, this.frames.length - 1)} FPS`;
+        const yawDegrees = ((-this.yaw * 180 / Math.PI) + 360) % 360;
+        const pitchDegrees = this.pitch * 180 / Math.PI;
+        $("#cursorCoordinates").textContent = `STABLE 3D ${yawDegrees.toFixed(0)}° / ${pitchDegrees.toFixed(0)}°`;
+      }
+    }
+    requestAnimationFrame((time) => this.draw(time));
+  }
+}
+
 const normalizeQuaternion = (quaternion = {}) => {
   const value = {
     x: Number(quaternion.x) || 0,
@@ -1935,8 +2328,12 @@ class CameraRenderer {
 
 const store = new MissionStore();
 const mapRenderer = new MapRenderer($("#mapCanvas"), store);
-const cloudRenderer = new CloudRenderer($("#cloudCanvas"), store);
-const snakeRenderer = new SnakePoseRenderer($("#snakeCanvas"), store);
+const cloudRenderer = new StableCloudRenderer($("#cloudCanvas"), store);
+let snakeRenderer = null;
+const ensureSnakeRenderer = () => {
+  if (!snakeRenderer) snakeRenderer = new SnakePoseRenderer($("#snakeCanvas"), store);
+  return snakeRenderer;
+};
 const wsUrl = new URLSearchParams(window.location.search).get("ws");
 const cameraRenderer = new CameraRenderer($("#cameraCanvas"), $("#cameraStream"));
 if (wsUrl) {
@@ -2118,7 +2515,8 @@ $$('.view-tab').forEach((button) => {
     const isSnake = view === "snake";
     mapRenderer.enabled = is2d || isOverview;
     cloudRenderer.enabled = is3d || isOverview;
-    snakeRenderer.enabled = isSnake;
+    if (snakeRenderer) snakeRenderer.enabled = isSnake;
+    if (isSnake) ensureSnakeRenderer().enabled = true;
     $("#mapCanvas").classList.toggle("hidden-view", !(is2d || isOverview));
     $("#cloudCanvas").classList.toggle("hidden-view", !(is3d || isOverview));
     $("#snakeCanvas").classList.toggle("hidden-view", !isSnake);
@@ -2137,8 +2535,8 @@ $$('.view-tab').forEach((button) => {
     );
     if (is3d || isOverview) cloudRenderer.resize();
     if (is2d || isOverview) mapRenderer.resize();
-    if (isSnake) snakeRenderer.resize();
-    if ((is3d && cloudRenderer.failed) || (isSnake && snakeRenderer.failed)) {
+    if (isSnake) ensureSnakeRenderer().resize();
+    if ((is3d && cloudRenderer.failed) || (isSnake && ensureSnakeRenderer().failed)) {
       showToast("이 브라우저에서 WebGL을 사용할 수 없습니다.");
     } else {
       const labels = {
@@ -2169,7 +2567,7 @@ $("#followButton").addEventListener("click", () => {
   }
 });
 $("#centerButton").addEventListener("click", () => {
-  if (snakeRenderer.enabled) snakeRenderer.setPreset("reset");
+  if (snakeRenderer?.enabled) snakeRenderer.setPreset("reset");
   else if (activeMapView === "overview") {
     mapRenderer.center();
     cloudRenderer.centerOnRobot();
@@ -2177,7 +2575,7 @@ $("#centerButton").addEventListener("click", () => {
   else mapRenderer.center();
 });
 $("#zoomInButton").addEventListener("click", () => {
-  if (snakeRenderer.enabled) snakeRenderer.distance = clamp(snakeRenderer.distance / 1.15, 0.25, 12);
+  if (snakeRenderer?.enabled) snakeRenderer.distance = clamp(snakeRenderer.distance / 1.15, 0.25, 12);
   else if (activeMapView === "overview") {
     mapRenderer.scale = clamp(mapRenderer.scale * 1.15, 28, 150);
     cloudRenderer.distance = clamp(cloudRenderer.distance / 1.15, 0.3, 100);
@@ -2185,7 +2583,7 @@ $("#zoomInButton").addEventListener("click", () => {
   else mapRenderer.scale = clamp(mapRenderer.scale * 1.15, 28, 150);
 });
 $("#zoomOutButton").addEventListener("click", () => {
-  if (snakeRenderer.enabled) snakeRenderer.distance = clamp(snakeRenderer.distance * 1.15, 0.25, 12);
+  if (snakeRenderer?.enabled) snakeRenderer.distance = clamp(snakeRenderer.distance * 1.15, 0.25, 12);
   else if (activeMapView === "overview") {
     mapRenderer.scale = clamp(mapRenderer.scale / 1.15, 28, 150);
     cloudRenderer.distance = clamp(cloudRenderer.distance * 1.15, 0.3, 100);
@@ -2196,7 +2594,7 @@ $$('[data-cloud-view]').forEach((button) => {
   button.addEventListener("click", () => cloudRenderer.setPreset(button.dataset.cloudView));
 });
 $$('[data-snake-view]').forEach((button) => {
-  button.addEventListener("click", () => snakeRenderer.setPreset(button.dataset.snakeView));
+  button.addEventListener("click", () => ensureSnakeRenderer().setPreset(button.dataset.snakeView));
 });
 $("#clearEvents").addEventListener("click", () => { store.state.events = []; renderEvents([]); });
 $("#estopButton").addEventListener("click", () => showToast("시제품 UI입니다. 실제 정지 명령은 연결되지 않았습니다."));

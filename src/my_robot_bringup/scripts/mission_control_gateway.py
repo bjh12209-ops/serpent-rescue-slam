@@ -644,8 +644,8 @@ class MissionControlGateway(Node):
         self.declare_parameter("yolo_input_width", 320)
         self.declare_parameter("occupied_threshold", 50)
         self.declare_parameter("max_path_points", 4000)
-        self.declare_parameter("max_cloud_points", 50000)
-        self.declare_parameter("cloud_voxel_size", 0.04)
+        self.declare_parameter("max_cloud_points", 60000)
+        self.declare_parameter("cloud_voxel_size", 0.03)
         self.declare_parameter("cloud_min_z", -1.5)
         self.declare_parameter("cloud_max_z", 3.0)
 

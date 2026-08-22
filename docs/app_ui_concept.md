@@ -56,7 +56,7 @@ RViz 화면을 영상으로 캡처해 전송하지 않는다. SLAM 결과를 경
 | `/slam/distance_from_start` | 출발점 직선거리 m | 2~5 Hz |
 | `/slam/diagnostics` | 각 스트림 Hz/age/상태 | 1 Hz |
 | `/grid_map` | 12 cm로 축약한 점유 셀 | 1 Hz |
-| `/cloud_map` | 4 cm voxel 캐시에 병합한 최대 30,000점 이진 3D 점군 | 1 Hz |
+| `/cloud_map` | 3 cm voxel 캐시에 병합한 최대 60,000점 이진 3D 점군 | 1 Hz |
 | D435 RGB | 640 px latest-only MJPEG | 최대 20 Hz |
 
 `/mapData` 전체를 브라우저로 반복 전송하지 않는다. 현재 gateway는
