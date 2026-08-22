@@ -958,7 +958,7 @@ class CloudRenderer {
     this.pendingState = this.store.state;
     this.dataDirty = true;
     this.lastDataUpload = 0;
-    this.hasAutoFit = false;
+    this.autoFrame = true;
     this.bounds = null;
     if (!this.gl) {
       this.failed = true;
@@ -975,7 +975,15 @@ class CloudRenderer {
     this.matrixLocation = this.gl.getUniformLocation(this.program, "u_viewProjection");
     this.pointSizeLocation = this.gl.getUniformLocation(this.program, "u_pointSize");
     this.roundPointLocation = this.gl.getUniformLocation(this.program, "u_roundPoint");
-    this.cloudBuffer = this.createGeometryBuffer();
+    // Double buffering keeps the last complete cloud drawable while the next
+    // 480 KB snapshot is uploaded. This avoids exposing an orphaned GPU buffer
+    // for a frame on integrated GPUs under ROS/YOLO load.
+    this.cloudBuffers = [
+      this.createGeometryBuffer(),
+      this.createGeometryBuffer(),
+    ];
+    this.cloudBufferIndex = 0;
+    this.cloudBuffer = this.cloudBuffers[this.cloudBufferIndex];
     this.pathBuffer = this.createGeometryBuffer();
     this.markerBuffer = this.createGeometryBuffer();
     this.headingBuffer = this.createGeometryBuffer();
@@ -1117,13 +1125,16 @@ class CloudRenderer {
       // briefly contained no cloud. A new gateway session starts a new page
       // cache and the following SPC1 packet replaces this buffer normally.
       if (positions.length === 0) return;
+      const nextBufferIndex = (this.cloudBufferIndex + 1) % this.cloudBuffers.length;
+      const nextBuffer = this.cloudBuffers[nextBufferIndex];
+      this.uploadGeometry(nextBuffer, positions, colors);
       this.cloudReference = state.cloudPoints;
-      this.uploadGeometry(this.cloudBuffer, positions, colors);
+      this.cloudBufferIndex = nextBufferIndex;
+      this.cloudBuffer = nextBuffer;
       if (positions.length > 0) {
         this.bounds = { minimum, maximum };
-        if (!this.hasAutoFit) {
+        if (this.autoFrame) {
           this.fitToCloud();
-          this.hasAutoFit = true;
         }
       }
     }
@@ -1210,6 +1221,7 @@ class CloudRenderer {
         );
       } else {
         this.follow = false;
+        this.autoFrame = false;
         updateFollowButton(false);
         const amount = this.distance * 0.0015;
         const eye = this.eyePosition();
@@ -1234,6 +1246,7 @@ class CloudRenderer {
     this.canvas.addEventListener("lostpointercapture", finishDrag);
     this.canvas.addEventListener("wheel", (event) => {
       event.preventDefault();
+      this.autoFrame = false;
       this.distance = clamp(this.distance * Math.exp(event.deltaY * 0.001), 0.3, 100);
     }, { passive: false });
     this.canvas.addEventListener("dblclick", () => this.centerOnRobot());
@@ -1255,6 +1268,7 @@ class CloudRenderer {
     const pose = this.store.state.pose;
     this.target = { x: pose.x, y: pose.y, z: pose.z + 0.25 };
     this.follow = true;
+    this.autoFrame = false;
     updateFollowButton(true);
   }
 
@@ -1278,13 +1292,17 @@ class CloudRenderer {
       y: (minimum[1] + maximum[1]) / 2,
       z: (minimum[2] + maximum[2]) / 2,
     };
-    const span = Math.max(
-      maximum[0] - minimum[0],
-      maximum[1] - minimum[1],
-      maximum[2] - minimum[2],
-      1,
+    const extents = maximum.map((value, index) => value - minimum[index]);
+    const radius = Math.max(Math.hypot(...extents) / 2, 0.5);
+    const aspect = this.canvas.width / Math.max(this.canvas.height, 1);
+    const verticalFov = Math.PI / 3;
+    const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * aspect);
+    const limitingFov = Math.max(0.2, Math.min(verticalFov, horizontalFov));
+    this.distance = clamp(
+      radius / Math.tan(limitingFov / 2) * 1.3,
+      1.5,
+      100,
     );
-    this.distance = clamp(span * 1.35, 1.5, 100);
     this.follow = false;
     updateFollowButton(false);
   }
@@ -1300,10 +1318,12 @@ class CloudRenderer {
       this.yaw = 0;
       this.pitch = 0.08;
     } else if (name === "fit") {
+      this.autoFrame = true;
       this.fitToCloud();
     } else if (name === "reset") {
       this.yaw = -Math.PI / 4;
       this.pitch = 0.62;
+      this.autoFrame = true;
       this.fitToCloud();
     }
   }
