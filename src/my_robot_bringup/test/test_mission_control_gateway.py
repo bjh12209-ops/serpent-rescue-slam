@@ -76,29 +76,40 @@ def test_cloud_packet_is_bounded_colored_and_filters_invalid_height():
     assert tuple(packet[20:23]) == (0x11, 0x22, 0x33)
 
 
-def test_isolated_sparse_cloud_does_not_replace_accumulated_map():
-    replace, streak = MODULE.cloud_replacement_decision(30000, 16, 0)
-    assert replace is False
-    assert streak == 1
-    replace, streak = MODULE.cloud_replacement_decision(30000, 28000, streak)
-    assert replace is True
-    assert streak == 0
+def test_sparse_cloud_is_merged_without_erasing_cached_map():
+    previous = MODULE.point_cloud_records(
+        packed_cloud([
+            (0.0, 0.0, 0.0, 0x112233),
+            (1.0, 0.0, 0.0, 0x445566),
+        ]),
+        maximum=10,
+        min_z=-1.0,
+        max_z=1.0,
+    )
+    candidate = MODULE.point_cloud_records(
+        packed_cloud([(2.0, 0.0, 0.0, 0x778899)]),
+        maximum=10,
+        min_z=-1.0,
+        max_z=1.0,
+    )
+    merged = MODULE.merge_cloud_records(
+        previous, candidate, maximum=10, voxel_size=0.04
+    )
+    assert len(merged) == 3
+    assert set(merged["x"]) == {0.0, 1.0, 2.0}
 
 
-def test_persistent_sparse_cloud_never_erases_the_accumulated_map():
-    streak = 0
-    for expected_streak in range(1, 101):
-        replace, streak = MODULE.cloud_replacement_decision(
-            30000, 16, streak
-        )
-        assert replace is False
-        assert streak == expected_streak
-
-
-def test_only_complete_graph_id_rewind_is_a_map_restart():
-    assert MODULE.map_graph_restarted(120, 1) is True
-    assert MODULE.map_graph_restarted(120, 20) is True
-    assert MODULE.map_graph_restarted(120, 119) is False
-    assert MODULE.map_graph_restarted(120, 121) is False
-    assert MODULE.map_graph_restarted(1, 1) is False
-    assert MODULE.map_graph_restarted(120, 0) is False
+def test_newest_color_replaces_same_voxel_without_duplicate():
+    previous = MODULE.point_cloud_records(
+        packed_cloud([(0.0, 0.0, 0.0, 0x112233)]), 10, -1.0, 1.0
+    )
+    candidate = MODULE.point_cloud_records(
+        packed_cloud([(0.01, 0.0, 0.0, 0xAABBCC)]), 10, -1.0, 1.0
+    )
+    merged = MODULE.merge_cloud_records(
+        previous, candidate, maximum=10, voxel_size=0.04
+    )
+    assert len(merged) == 1
+    assert tuple(merged[["red", "green", "blue"]][0]) == (
+        0xAA, 0xBB, 0xCC
+    )

@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 from urllib.parse import urlsplit
+import uuid
 
 from ament_index_python.packages import get_package_share_directory
 import cv2
@@ -107,44 +108,6 @@ CLOUD_RECORD_DTYPE = np.dtype([
 ])
 
 
-def cloud_replacement_decision(
-    previous_count,
-    candidate_count,
-    sparse_streak,
-    minimum_baseline=500,
-    minimum_ratio=0.12,
-):
-    """
-    Reject isolated, implausibly sparse replacements of a useful map.
-
-    RTAB-Map may briefly publish a tiny cloud while its map products are being
-    rebuilt. A verified /mapGraph reset clears the retained cloud separately,
-    so a tiny product must never overwrite an accumulated map by itself.
-    """
-    previous = max(0, int(previous_count))
-    candidate = max(0, int(candidate_count))
-    if candidate == 0:
-        return False, sparse_streak
-    suspicious = (
-        previous >= int(minimum_baseline)
-        and candidate < previous * float(minimum_ratio)
-    )
-    if not suspicious:
-        return True, 0
-    return False, int(sparse_streak) + 1
-
-
-def map_graph_restarted(previous_max_id, current_max_id):
-    """Return true only when the complete RTAB graph restarts at lower IDs."""
-    previous = max(0, int(previous_max_id))
-    current = max(0, int(current_max_id))
-    return (
-        previous >= 2
-        and current > 0
-        and (current == 1 or (previous >= 8 and current <= previous // 4))
-    )
-
-
 def quaternion_yaw(quaternion):
     """Return REP-103 yaw in radians from a geometry_msgs quaternion."""
     siny_cosp = 2.0 * (
@@ -192,8 +155,8 @@ def pose_to_dict(pose):
     }
 
 
-def point_cloud_binary_packet(message, maximum, min_z, max_z):
-    """Vectorize and pack a bounded PointCloud2 as SPC1 binary records."""
+def point_cloud_records(message, maximum, min_z, max_z):
+    """Vectorize a bounded PointCloud2 into browser-ready records."""
     fields = {field.name: field for field in message.fields}
     color_name = "rgb" if "rgb" in fields else (
         "rgba" if "rgba" in fields else None
@@ -205,7 +168,7 @@ def point_cloud_binary_packet(message, maximum, min_z, max_z):
         message, field_names=field_names, skip_nans=False
     )
     if len(points) == 0:
-        return None, 0
+        return np.empty(0, dtype=CLOUD_RECORD_DTYPE)
 
     x_values = np.asarray(points["x"])
     y_values = np.asarray(points["y"])
@@ -219,7 +182,7 @@ def point_cloud_binary_packet(message, maximum, min_z, max_z):
     )
     indices = np.flatnonzero(valid)
     if len(indices) == 0:
-        return None, 0
+        return np.empty(0, dtype=CLOUD_RECORD_DTYPE)
     if len(indices) > maximum:
         sample_offsets = np.linspace(
             0, len(indices) - 1, num=maximum, dtype=np.int64
@@ -247,8 +210,51 @@ def point_cloud_binary_packet(message, maximum, min_z, max_z):
         records["green"] = (140 + tone * 71).astype(np.uint8)
         records["blue"] = 173
 
-    packet = CLOUD_MAGIC + struct.pack("<I", len(records)) + records.tobytes()
-    return packet, len(records)
+    return records
+
+
+def merge_cloud_records(previous, candidate, maximum, voxel_size):
+    """Merge map samples into a bounded persistent voxel cache."""
+    if candidate is None or len(candidate) == 0:
+        return previous
+    if previous is None or len(previous) == 0:
+        combined = candidate
+    else:
+        combined = np.concatenate((previous, candidate))
+
+    resolution = max(float(voxel_size), 0.005)
+    coordinates = np.column_stack((
+        combined["x"], combined["y"], combined["z"],
+    ))
+    voxel_keys = np.floor(coordinates / resolution).astype(np.int64)
+    # Search backwards so the newest RGB sample wins inside an existing voxel.
+    _, reverse_indices = np.unique(
+        voxel_keys[::-1], axis=0, return_index=True
+    )
+    keep = len(combined) - 1 - reverse_indices
+    merged = combined[np.sort(keep)]
+    limit = max(1, int(maximum))
+    if len(merged) > limit:
+        sample = np.linspace(0, len(merged) - 1, limit, dtype=np.int64)
+        merged = merged[sample]
+    return np.ascontiguousarray(merged)
+
+
+def cloud_records_packet(records):
+    """Pack cached point records into the SPC1 browser transport."""
+    if records is None or len(records) == 0:
+        return None
+    return (
+        CLOUD_MAGIC
+        + struct.pack("<I", len(records))
+        + np.ascontiguousarray(records).tobytes()
+    )
+
+
+def point_cloud_binary_packet(message, maximum, min_z, max_z):
+    """Vectorize and pack a bounded PointCloud2 as SPC1 binary records."""
+    records = point_cloud_records(message, maximum, min_z, max_z)
+    return cloud_records_packet(records), len(records)
 
 
 class MissionHttpHandler(SimpleHTTPRequestHandler):
@@ -468,6 +474,7 @@ class MissionControlGateway(Node):
         self._declare_parameters()
 
         self.state_lock = threading.Lock()
+        self.session_id = uuid.uuid4().hex
         self.started_at = time.monotonic()
         self.last_path_publish = 0.0
         self.last_map_publish = 0.0
@@ -484,7 +491,7 @@ class MissionControlGateway(Node):
         self.cloud_input_event = threading.Event()
         self.latest_cloud_message = None
         self.cloud_packet = None
-        self.sparse_cloud_streak = 0
+        self.cloud_records = None
         self.last_graph_node_id = 0
         self.running = True
         self.cv_bridge = CvBridge()
@@ -638,6 +645,7 @@ class MissionControlGateway(Node):
         self.declare_parameter("occupied_threshold", 50)
         self.declare_parameter("max_path_points", 4000)
         self.declare_parameter("max_cloud_points", 50000)
+        self.declare_parameter("cloud_voxel_size", 0.04)
         self.declare_parameter("cloud_min_z", -1.5)
         self.declare_parameter("cloud_max_z", 3.0)
 
@@ -873,6 +881,7 @@ class MissionControlGateway(Node):
             data["missionSeconds"] = time.monotonic() - self.started_at
             payload = {
                 "type": "snapshot",
+                "sessionId": self.session_id,
                 "data": data,
                 "map": deepcopy(self.map_state),
                 # The cloud follows as an SPC1 binary frame. Keeping it out of
@@ -981,22 +990,13 @@ class MissionControlGateway(Node):
                 )
 
     def map_graph_callback(self, message):
-        """Track the complete optimized graph and detect a real DB restart."""
+        """Track the complete optimized graph without clearing map products."""
         node_ids = tuple(int(node_id) for node_id in message.poses_id)
         graph_node_id = max(node_ids, default=0)
-        reset_cloud = False
         with self.state_lock:
-            if map_graph_restarted(self.last_graph_node_id, graph_node_id):
-                self.cloud_packet = None
-                self.state["cloudPointCount"] = 0
-                self.state["target"] = None
-                self.sparse_cloud_streak = 0
-                reset_cloud = True
             if graph_node_id > 0:
                 self.last_graph_node_id = graph_node_id
             self.state["mapNodes"] = len(node_ids)
-        if reset_cloud:
-            self.emit({"type": "cloud_reset"})
 
     def map_callback(self, message):
         now = time.monotonic()
@@ -1071,7 +1071,7 @@ class MissionControlGateway(Node):
                 time.sleep(delay)
                 message = self._take_latest_cloud_message() or message
             try:
-                packet, count = point_cloud_binary_packet(
+                records = point_cloud_records(
                     message,
                     max(100, int(self.get_parameter("max_cloud_points").value)),
                     float(self.get_parameter("cloud_min_z").value),
@@ -1084,21 +1084,20 @@ class MissionControlGateway(Node):
                 )
                 continue
             self.last_cloud_publish = time.monotonic()
-            # RTAB-Map can briefly publish an empty product while rebuilding.
-            # Never replace a useful accumulated map with that transient gap.
-            if not packet or count == 0:
+            if len(records) == 0:
                 continue
             with self.state_lock:
-                replace, self.sparse_cloud_streak = cloud_replacement_decision(
-                    self.state["cloudPointCount"],
-                    count,
-                    self.sparse_cloud_streak,
+                self.cloud_records = merge_cloud_records(
+                    self.cloud_records,
+                    records,
+                    int(self.get_parameter("max_cloud_points").value),
+                    float(self.get_parameter("cloud_voxel_size").value),
                 )
-                if not replace:
-                    continue
-                self.cloud_packet = packet
-                self.state["cloudPointCount"] = count
-            self.emit(packet)
+                self.cloud_packet = cloud_records_packet(self.cloud_records)
+                self.state["cloudPointCount"] = len(self.cloud_records)
+                packet = self.cloud_packet
+            if packet:
+                self.emit(packet)
 
     def camera_callback(self, message):
         """Replace the pending frame; JPEG encoding runs in its own thread."""

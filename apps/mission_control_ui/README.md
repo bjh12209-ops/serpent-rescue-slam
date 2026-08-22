@@ -11,7 +11,7 @@ python3 -m http.server 8080 --directory apps/mission_control_ui
 ```
 
 브라우저에서 `http://localhost:8080`을 연다. 지도 드래그, 휠 확대/축소,
-로봇 추적, 2D/3D 전환과 3-IMU `SNAKE POSE` 화면을 사용할 수 있다.
+로봇 추적, 2D·3D 동시 `OVERVIEW`와 3-IMU `SNAKE POSE` 화면을 사용할 수 있다.
 
 ## 실제 ROS 2 연결
 
@@ -130,10 +130,13 @@ gateway가 ROS 메시지를 아래의 작은 JSON 이벤트로 변환해야 한�
 ```
 
 - `/map`이 있으면 2D의 탐색 영역과 점유 셀을 표시한다.
-- `/cloud_map`이 있으면 3D 탭에 RGB가 보존된 실제 점군을 최대 30,000점까지 표시한다.
-- 비어 있거나 기존 정상 지도 대비 12% 미만으로 급감한 일시적 cloud 메시지는
-  직전 정상 지도를 지우지 않는다. DB 초기화는 작업 메모리(`/info.wm_state`)가
-  아니라 전체 `/mapGraph`의 ID 재시작으로만 판별한다.
+- `/cloud_map`이 있으면 RGB가 보존된 실제 점군을 최대 30,000점까지 표시한다.
+- gateway는 점군을 기본 4 cm voxel 캐시에 병합한다. 비거나 부분적인 RTAB-Map
+  출력은 기존 캐시를 지울 수 없고 브라우저 GPU 버퍼도 빈 값으로 교체하지 않는다.
+- `/mapGraph`는 노드 수 표시에만 사용한다. gateway가 실제 재시작할 때 생성되는
+  `sessionId`만 새 점군 세션을 구분하므로 loop closure를 초기화로 오판하지 않는다.
+- 기본 `OVERVIEW`에는 2D 지도와 3D 점군이 함께 나오며 오른쪽 전방 카메라와
+  사람 전용 탐지 결과도 계속 표시된다.
 - 3D 탭은 WebGL로 그리며 좌클릭 orbit, 우클릭/Shift 3축 pan, 휠 zoom과
   TOP/FRONT/SIDE/FIT/RESET 보기를 지원한다. 탭 전환 후 카메라 상태도 유지한다.
 - D435 RGB는 최대 20 FPS, 640 px, JPEG 품질 65의 별도 MJPEG로 표시한다.

@@ -135,12 +135,13 @@
         <section class="map-panel panel">
           <div class="map-toolbar">
             <div class="view-tabs" role="tablist" aria-label="지도 모드">
-              <button class="view-tab active" data-view="2d" role="tab">2D MAP</button>
+              <button class="view-tab active" data-view="overview" role="tab">OVERVIEW</button>
+              <button class="view-tab" data-view="2d" role="tab">2D MAP</button>
               <button class="view-tab" data-view="3d" role="tab">3D CLOUD</button>
               <button class="view-tab" data-view="snake" role="tab">SNAKE POSE</button>
             </div>
             <div class="map-actions">
-              <div class="cloud-view-actions hidden" id="cloudViewActions">
+              <div class="cloud-view-actions" id="cloudViewActions">
                 <button class="tool-button" data-cloud-view="top">TOP</button>
                 <button class="tool-button" data-cloud-view="front">FRONT</button>
                 <button class="tool-button" data-cloud-view="side">SIDE</button>
@@ -162,10 +163,12 @@
             </div>
           </div>
 
-          <div class="map-stage" id="mapStage">
+          <div class="map-stage overview-mode" id="mapStage">
             <canvas id="mapCanvas" aria-label="실시간 탐색 지도"></canvas>
-            <canvas id="cloudCanvas" class="hidden-view" aria-label="자유 회전 3D 포인트클라우드"></canvas>
+            <canvas id="cloudCanvas" aria-label="자유 회전 3D 포인트클라우드"></canvas>
             <canvas id="snakeCanvas" class="hidden-view" aria-label="세 IMU 기반 뱀 로봇 모듈 자세"></canvas>
+            <span class="overview-label overview-label-2d">2D MAP</span>
+            <span class="overview-label overview-label-3d">3D CLOUD · PERSISTENT</span>
             <div id="targetMapLabel" class="target-map-label hidden" aria-live="polite"></div>
             <div class="scan-overlay"></div>
             <div class="map-corner top-left">
@@ -207,6 +210,7 @@
             <div><span>RENDER</span><strong id="renderRate">60 FPS</strong></div>
             <div><span>EXPLORED</span><strong id="exploredArea">0.0 m²</strong></div>
             <div><span>MAP NODES</span><strong id="mapNodes">0</strong></div>
+            <div><span>3D CACHE</span><strong id="cloudPointCount">0 PTS</strong></div>
           </footer>
         </section>
 
@@ -247,6 +251,6 @@
     </div>
 
     <div class="toast" id="toast" role="status"></div>
-    <script defer src="app.js?v=20260821-triple-imu"></script>
+    <script defer src="app.js?v=20260822-persistent-cloud"></script>
   </body>
 </html>

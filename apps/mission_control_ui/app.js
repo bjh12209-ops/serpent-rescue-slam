@@ -43,6 +43,7 @@ class MissionStore extends EventTarget {
       mapCellSize: 0.42,
       cloudPoints: [],
       cloudPointCount: 0,
+      cloudSessionId: null,
       segmentPoses: [],
       cameraFrame: null,
       distanceTraveled: 0,
@@ -253,6 +254,7 @@ class WebSocketTelemetrySource {
     this.url = url;
     this.retryDelay = 1000;
     this.sparseCloudStreak = 0;
+    this.sessionId = null;
   }
 
   start() {
@@ -306,8 +308,8 @@ class WebSocketTelemetrySource {
     const suspiciouslySparse = previousCount >= 500 && count < previousCount * 0.12;
     if (suspiciouslySparse) {
       this.sparseCloudStreak += 1;
-      // Only an explicit cloud_reset, derived from the complete /mapGraph,
-      // may clear a useful map. Sparse RTAB rebuild products are never drawn.
+      // The server already keeps a persistent voxel cache. This second guard
+      // protects clients connected to an older or mixed-version gateway.
       return;
     }
     this.sparseCloudStreak = 0;
@@ -332,6 +334,11 @@ class WebSocketTelemetrySource {
   applyMessage(message) {
     if (message.type === "snapshot") {
       const map = message.map ?? {};
+      const nextSessionId = message.sessionId ?? null;
+      const sessionChanged = Boolean(
+        this.sessionId && nextSessionId && this.sessionId !== nextSessionId
+      );
+      if (nextSessionId) this.sessionId = nextSessionId;
       const exploredCells = new Set((map.known ?? []).map((cell) => `${cell[0]},${cell[1]}`));
       const occupiedCells = new Set((map.occupied ?? []).map((cell) => `${cell[0]},${cell[1]}`));
       this.store.update({
@@ -343,9 +350,15 @@ class WebSocketTelemetrySource {
         // The current gateway sends the cloud immediately after this JSON as
         // an SPC1 binary frame. Preserve the last good cloud across reconnects
         // instead of replacing it with the empty compatibility field.
-        cloudPoints: (message.cloudPoints?.length ?? 0) > 0
+        cloudPoints: sessionChanged
+          ? []
+          : ((message.cloudPoints?.length ?? 0) > 0
           ? message.cloudPoints
-          : this.store.state.cloudPoints,
+          : this.store.state.cloudPoints),
+        cloudPointCount: sessionChanged
+          ? 0
+          : (message.data.cloudPointCount ?? this.store.state.cloudPointCount),
+        cloudSessionId: nextSessionId ?? this.store.state.cloudSessionId,
       });
     } else if (message.type === "pose") {
       this.store.update({
@@ -376,8 +389,9 @@ class WebSocketTelemetrySource {
       const points = message.points ?? [];
       if (points.length > 0) this.store.update({ cloudPoints: points, cloudPointCount: points.length });
     } else if (message.type === "cloud_reset") {
-      this.sparseCloudStreak = 0;
-      this.store.update({ cloudPoints: [], cloudPointCount: 0, target: null });
+      // Legacy gateways emitted false-positive resets while RTAB-Map optimized
+      // its graph. A session change in the snapshot is the only valid reset.
+      console.info("Ignoring legacy cloud_reset; persistent cache retained");
     } else if (message.type === "rates") {
       this.store.update({
         rates: { ...this.store.state.rates, ...message.rates },
@@ -522,7 +536,7 @@ class MapRenderer {
 
   resize() {
     const ratio = window.devicePixelRatio || 1;
-    const bounds = this.canvas.parentElement.getBoundingClientRect();
+    const bounds = this.canvas.getBoundingClientRect();
     const width = Math.max(1, Math.round(bounds.width * ratio));
     const height = Math.max(1, Math.round(bounds.height * ratio));
     if (this.canvas.width !== width || this.canvas.height !== height) {
@@ -924,11 +938,9 @@ class CloudRenderer {
       alpha: false,
       depth: true,
       powerPreference: "high-performance",
-      // Retain the last completed frame if the integrated GPU misses a frame
-      // while ROS, mapping and YOLO are sharing the mini PC.
-      preserveDrawingBuffer: true,
+      preserveDrawingBuffer: false,
     });
-    this.enabled = false;
+    this.enabled = true;
     this.follow = true;
     this.yaw = -Math.PI / 4;
     this.pitch = 0.62;
@@ -952,6 +964,11 @@ class CloudRenderer {
       this.failed = true;
       return;
     }
+    this.canvas.addEventListener("webglcontextlost", (event) => {
+      event.preventDefault();
+      this.failed = true;
+      showToast("3D GPU 컨텍스트 복구 중입니다.");
+    });
     this.program = this.createProgram();
     this.positionLocation = this.gl.getAttribLocation(this.program, "a_position");
     this.colorLocation = this.gl.getAttribLocation(this.program, "a_color");
@@ -1060,7 +1077,6 @@ class CloudRenderer {
 
   updateData(state) {
     if (state.cloudPoints !== this.cloudReference) {
-      this.cloudReference = state.cloudPoints;
       let positions = [];
       let colors = [];
       const minimum = [Infinity, Infinity, Infinity];
@@ -1097,6 +1113,11 @@ class CloudRenderer {
           maximum[2] = Math.max(maximum[2], z);
         });
       }
+      // Never clear a valid GPU point buffer because a transport/state update
+      // briefly contained no cloud. A new gateway session starts a new page
+      // cache and the following SPC1 packet replaces this buffer normally.
+      if (positions.length === 0) return;
+      this.cloudReference = state.cloudPoints;
       this.uploadGeometry(this.cloudBuffer, positions, colors);
       if (positions.length > 0) {
         this.bounds = { minimum, maximum };
@@ -1221,7 +1242,7 @@ class CloudRenderer {
   resize() {
     const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
     this.pixelRatio = ratio;
-    const bounds = this.canvas.parentElement.getBoundingClientRect();
+    const bounds = this.canvas.getBoundingClientRect();
     const width = Math.max(1, Math.round(bounds.width * ratio));
     const height = Math.max(1, Math.round(bounds.height * ratio));
     if (this.canvas.width === width && this.canvas.height === height) return;
@@ -1331,7 +1352,8 @@ class CloudRenderer {
       return;
     }
     const bounds = this.canvas.getBoundingClientRect();
-    label.style.left = `${(normalizedX * 0.5 + 0.5) * bounds.width}px`;
+    const stageBounds = this.canvas.parentElement.getBoundingClientRect();
+    label.style.left = `${bounds.left - stageBounds.left + (normalizedX * 0.5 + 0.5) * bounds.width}px`;
     label.style.top = `${(0.5 - normalizedY * 0.5) * bounds.height}px`;
     const mapDistance = Math.hypot(
       target.x - this.store.state.pose.x,
@@ -1941,6 +1963,7 @@ function renderDashboard(state) {
     ?? state.cloudPointCount
     ?? state.cloudPoints?.length
     ?? 0;
+  $("#cloudPointCount").textContent = `${cloudPointCount.toLocaleString()} PTS`;
   const visibleMapItems = state.exploredCells.size + cloudPointCount;
   $("#mapMessage").classList.toggle("hidden", visibleMapItems > 90);
   $("#cameraTimestamp").textContent = new Date().toLocaleTimeString("ko-KR", { hour12: false });
@@ -2062,34 +2085,44 @@ store.addEventListener("update", () => {
   }), delay);
 });
 
+let activeMapView = "overview";
 $$('.view-tab').forEach((button) => {
   button.addEventListener("click", () => {
     $$('.view-tab').forEach((item) => item.classList.remove("active"));
     button.classList.add("active");
     const view = button.dataset.view;
+    activeMapView = view;
+    const isOverview = view === "overview";
     const is2d = view === "2d";
     const is3d = view === "3d";
     const isSnake = view === "snake";
-    mapRenderer.enabled = is2d;
-    cloudRenderer.enabled = is3d;
+    mapRenderer.enabled = is2d || isOverview;
+    cloudRenderer.enabled = is3d || isOverview;
     snakeRenderer.enabled = isSnake;
-    $("#mapCanvas").classList.toggle("hidden-view", !is2d);
-    $("#cloudCanvas").classList.toggle("hidden-view", !is3d);
+    $("#mapCanvas").classList.toggle("hidden-view", !(is2d || isOverview));
+    $("#cloudCanvas").classList.toggle("hidden-view", !(is3d || isOverview));
     $("#snakeCanvas").classList.toggle("hidden-view", !isSnake);
-    $("#cloudViewActions").classList.toggle("hidden", !is3d);
+    $("#cloudViewActions").classList.toggle("hidden", !(is3d || isOverview));
     $("#snakeViewActions").classList.toggle("hidden", !isSnake);
     $("#orbitHelp").classList.toggle("hidden", is2d);
     $("#imuPosePanel").classList.toggle("hidden", !isSnake);
     $("#mapStage").classList.toggle("snake-mode", isSnake);
-    if (!is3d) $("#targetMapLabel").classList.add("hidden");
+    $("#mapStage").classList.toggle("overview-mode", isOverview);
+    if (!(is3d || isOverview)) $("#targetMapLabel").classList.add("hidden");
     $("#followButton").disabled = isSnake;
-    updateFollowButton(is3d ? cloudRenderer.follow : (is2d && mapRenderer.follow));
-    if (is3d) cloudRenderer.resize();
+    updateFollowButton(
+      isOverview
+        ? (cloudRenderer.follow && mapRenderer.follow)
+        : (is3d ? cloudRenderer.follow : (is2d && mapRenderer.follow)),
+    );
+    if (is3d || isOverview) cloudRenderer.resize();
+    if (is2d || isOverview) mapRenderer.resize();
     if (isSnake) snakeRenderer.resize();
     if ((is3d && cloudRenderer.failed) || (isSnake && snakeRenderer.failed)) {
       showToast("이 브라우저에서 WebGL을 사용할 수 없습니다.");
     } else {
       const labels = {
+        overview: "2D·3D·카메라·사람 탐지를 동시에 표시합니다.",
         "2d": "탑다운 지도로 전환했습니다.",
         "3d": "자유 회전 3D 포인트클라우드로 전환했습니다.",
         snake: "세 IMU 기반 뱀 로봇 자세로 전환했습니다.",
@@ -2100,8 +2133,13 @@ $$('.view-tab').forEach((button) => {
 });
 
 $("#followButton").addEventListener("click", () => {
-  const is3d = cloudRenderer.enabled;
-  if (is3d) {
+  if (activeMapView === "overview") {
+    const follow = !(cloudRenderer.follow && mapRenderer.follow);
+    cloudRenderer.follow = follow;
+    mapRenderer.follow = follow;
+    if (follow) cloudRenderer.centerOnRobot();
+    updateFollowButton(follow);
+  } else if (cloudRenderer.enabled) {
     cloudRenderer.follow = !cloudRenderer.follow;
     if (cloudRenderer.follow) cloudRenderer.centerOnRobot();
     updateFollowButton(cloudRenderer.follow);
@@ -2112,17 +2150,26 @@ $("#followButton").addEventListener("click", () => {
 });
 $("#centerButton").addEventListener("click", () => {
   if (snakeRenderer.enabled) snakeRenderer.setPreset("reset");
-  else if (cloudRenderer.enabled) cloudRenderer.centerOnRobot();
+  else if (activeMapView === "overview") {
+    mapRenderer.center();
+    cloudRenderer.centerOnRobot();
+  } else if (cloudRenderer.enabled) cloudRenderer.centerOnRobot();
   else mapRenderer.center();
 });
 $("#zoomInButton").addEventListener("click", () => {
   if (snakeRenderer.enabled) snakeRenderer.distance = clamp(snakeRenderer.distance / 1.15, 0.25, 12);
-  else if (cloudRenderer.enabled) cloudRenderer.distance = clamp(cloudRenderer.distance / 1.15, 0.3, 100);
+  else if (activeMapView === "overview") {
+    mapRenderer.scale = clamp(mapRenderer.scale * 1.15, 28, 150);
+    cloudRenderer.distance = clamp(cloudRenderer.distance / 1.15, 0.3, 100);
+  } else if (cloudRenderer.enabled) cloudRenderer.distance = clamp(cloudRenderer.distance / 1.15, 0.3, 100);
   else mapRenderer.scale = clamp(mapRenderer.scale * 1.15, 28, 150);
 });
 $("#zoomOutButton").addEventListener("click", () => {
   if (snakeRenderer.enabled) snakeRenderer.distance = clamp(snakeRenderer.distance * 1.15, 0.25, 12);
-  else if (cloudRenderer.enabled) cloudRenderer.distance = clamp(cloudRenderer.distance * 1.15, 0.3, 100);
+  else if (activeMapView === "overview") {
+    mapRenderer.scale = clamp(mapRenderer.scale / 1.15, 28, 150);
+    cloudRenderer.distance = clamp(cloudRenderer.distance * 1.15, 0.3, 100);
+  } else if (cloudRenderer.enabled) cloudRenderer.distance = clamp(cloudRenderer.distance * 1.15, 0.3, 100);
   else mapRenderer.scale = clamp(mapRenderer.scale / 1.15, 28, 150);
 });
 $$('[data-cloud-view]').forEach((button) => {
@@ -2140,7 +2187,7 @@ $("#fullscreenButton").addEventListener("click", async () => {
 
 renderDashboard(store.state);
 const initialView = new URLSearchParams(window.location.search).get("view");
-if (["2d", "3d", "snake"].includes(initialView) && initialView !== "2d") {
+if (["2d", "3d", "snake"].includes(initialView)) {
   document.querySelector(`[data-view="${initialView}"]`)?.click();
 }
 telemetrySource.start();

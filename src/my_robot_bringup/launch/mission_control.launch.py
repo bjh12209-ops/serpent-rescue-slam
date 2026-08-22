@@ -23,6 +23,7 @@ def generate_launch_description():
         DeclareLaunchArgument("serve_ui", default_value="true"),
         DeclareLaunchArgument("map_cell_size", default_value="0.05"),
         DeclareLaunchArgument("max_cloud_points", default_value="30000"),
+        DeclareLaunchArgument("cloud_voxel_size", default_value="0.04"),
         DeclareLaunchArgument("cloud_min_z", default_value="-1.5"),
         DeclareLaunchArgument("cloud_max_z", default_value="3.0"),
         DeclareLaunchArgument("camera_publish_rate", default_value="20.0"),
@@ -60,6 +61,9 @@ def generate_launch_description():
                 ),
                 "max_cloud_points": ParameterValue(
                     LaunchConfiguration("max_cloud_points"), value_type=int
+                ),
+                "cloud_voxel_size": ParameterValue(
+                    LaunchConfiguration("cloud_voxel_size"), value_type=float
                 ),
                 "cloud_min_z": ParameterValue(
                     LaunchConfiguration("cloud_min_z"), value_type=float

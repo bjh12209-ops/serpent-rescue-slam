@@ -63,7 +63,7 @@ WebSocket JSON과 MJPEG로 변환한다.
 - 위치·방향·거리·Hz: 작은 JSON 이벤트
 - 경로: 간소화한 점 목록
 - 2D 지도: 낮은 빈도의 점유 셀
-- 3D 지도: voxel/downsample된 제한된 점군
+- 3D 지도: gateway 세션 동안 유지되는 voxel/downsample 점군 캐시
 - RGB: 오래된 프레임을 쌓지 않는 latest-frame-only MJPEG
 - 사람 감지: person-only 이벤트와 신뢰도
 
@@ -79,5 +79,7 @@ gateway는 읽기 전용이며 로봇 제어 토픽을 발행하지 않는다. �
 - 시작점 재방문 시 loop closure가 수락돼야 한다.
 - 지도, 현재 pose와 실제 경로가 같은 `map` 좌표에서 일치해야 한다.
 - 카메라나 점군 지연이 WebSocket 큐에 누적되지 않아야 한다.
+- RTAB-Map의 부분 출력과 graph 최적화는 이미 표시 중인 3D GPU 버퍼를 지우지
+  않는다. 새 gateway `sessionId`만 새로운 점군 세션을 시작한다.
 
 세부 실행 및 진단 순서는 [지도 품질 가이드](mapping_quality.md)를 따른다.
